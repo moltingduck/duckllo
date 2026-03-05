@@ -610,3 +610,31 @@ textarea { resize: vertical; font-family: inherit; }
   .card-detail-sidebar { width: 100%; }
   .column { min-width: 260px; }
 }
+
+/* Toast notifications */
+.toast {
+  position: fixed;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%) translateY(20px);
+  padding: 12px 24px;
+  border-radius: var(--radius);
+  font-size: 0.9rem;
+  line-height: 1.4;
+  max-width: 600px;
+  z-index: 10000;
+  opacity: 0;
+  transition: opacity 0.3s, transform 0.3s;
+  pointer-events: none;
+}
+
+.toast.show {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+}
+
+.toast-error {
+  background: var(--danger);
+  color: white;
+  border: 1px solid #ff3333;
+}

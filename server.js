@@ -128,6 +128,29 @@ async function initDB() {
   `);
 }
 
+// ── Quality Gate Rules ──────────────────────────────────────────────────
+// Tags that require demo media/GIF to move to Review/Done
+const DEMO_REQUIRED_TAGS = ['ui', 'ux', 'ui/ux', 'frontend', 'user-operation', 'user-facing', 'demo-required'];
+
+function validateCardForGatedColumn(card, targetColumn) {
+  if (targetColumn !== 'Review' && targetColumn !== 'Done') return null;
+
+  const labels = (card.labels || []).map(l => l.toLowerCase());
+  const needsDemo = labels.some(l => DEMO_REQUIRED_TAGS.includes(l));
+  const hasDemo = !!card.demo_gif_url;
+  const hasTestResult = !!card.testing_result && card.testing_result.trim().length > 0;
+
+  if (needsDemo && !hasDemo) {
+    return `Cards tagged with UI/UX/user-operation labels require a demo GIF/media to move to ${targetColumn}. Missing: demo media. (tags: ${labels.filter(l => DEMO_REQUIRED_TAGS.includes(l)).join(', ')})`;
+  }
+
+  if (!hasDemo && !hasTestResult) {
+    return `Cards must have at least a test result or demo media to move to ${targetColumn}. Missing: both testing_result and demo_gif_url.`;
+  }
+
+  return null; // passes
+}
+
 // ── Auth Middleware ──────────────────────────────────────────────────────
 
 async function authenticate(req, res, next) {
@@ -296,6 +319,38 @@ app.post('/api/projects', authenticate, async (req, res) => {
     await pool.query('INSERT INTO projects (id, name, description, owner_id, columns_config) VALUES ($1, $2, $3, $4, $5)', [id, name, description || '', req.user.id, columns_config]);
     await pool.query('INSERT INTO project_members (project_id, user_id, role) VALUES ($1, $2, $3)', [id, req.user.id, 'owner']);
 
+    // Pin quality gate rules card
+    const rulesCardId = uuidv4();
+    const rulesDesc = [
+      '## Card Quality Gate Rules (enforced by server)',
+      '',
+      'These rules are enforced automatically when moving cards to **Review** or **Done**.',
+      '',
+      '### All cards must have at least ONE of:',
+      '- A **test result** (`testing_result` field with actual output)',
+      '- A **demo GIF/media** (uploaded via the card)',
+      '',
+      '### Cards tagged with UI/UX/user-facing labels MUST have:',
+      '- A **demo GIF/media** showing the feature in action',
+      '- Tags that trigger this rule: `ui`, `ux`, `ui/ux`, `frontend`, `user-operation`, `user-facing`, `demo-required`',
+      '',
+      '### Bug fix / performance cards need:',
+      '- A **test result** proving the fix works',
+      '',
+      '### How it works:',
+      '- Server rejects moves to Review/Done if requirements are not met (HTTP 422)',
+      '- This applies to both drag-and-drop moves and API updates',
+      '- Add the appropriate labels when creating cards so the correct rules apply',
+      '',
+      '*This card is auto-created for every project. Do not delete it.*',
+    ].join('\n');
+    await pool.query(
+      `INSERT INTO cards (id, project_id, title, description, card_type, column_name, position, priority, labels, testing_status, testing_result, created_by)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
+      [rulesCardId, id, 'Quality Gate Rules (pinned)', rulesDesc, 'task', 'Backlog', 0, 'critical',
+       JSON.stringify(['rules', 'pinned']), 'passed', 'Enforced by server — no test needed.', req.user.id]
+    );
+
     res.json({ id, name, description, owner_id: req.user.id, columns_config: JSON.parse(columns_config) });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -401,6 +456,17 @@ app.patch('/api/projects/:projectId/cards/:cardId', authenticate, requireProject
     const { rows: cards } = await pool.query('SELECT * FROM cards WHERE id = $1 AND project_id = $2', [req.params.cardId, req.params.projectId]);
     if (!cards[0]) return res.status(404).json({ error: 'Card not found' });
 
+    // Quality gate: check if column_name is changing to a gated column
+    if (req.body.column_name) {
+      // Merge current card with incoming changes to check against final state
+      const merged = { ...cards[0] };
+      if (req.body.labels !== undefined) merged.labels = req.body.labels;
+      if (req.body.testing_result !== undefined) merged.testing_result = req.body.testing_result;
+      if (req.body.demo_gif_url !== undefined) merged.demo_gif_url = req.body.demo_gif_url;
+      const gateError = validateCardForGatedColumn(merged, req.body.column_name);
+      if (gateError) return res.status(422).json({ error: gateError });
+    }
+
     const allowedFields = ['title', 'description', 'card_type', 'column_name', 'position', 'priority', 'assignee_id', 'testing_status', 'testing_result', 'demo_gif_url', 'labels'];
     const updates = [];
     const values = [];
@@ -443,6 +509,10 @@ app.post('/api/projects/:projectId/cards/:cardId/move', authenticate, requirePro
 
     const columns = req.project.columns_config;
     if (!columns.includes(column_name)) return res.status(400).json({ error: 'Invalid column' });
+
+    // Quality gate check
+    const gateError = validateCardForGatedColumn(cards[0], column_name);
+    if (gateError) return res.status(422).json({ error: gateError });
 
     const client = await pool.connect();
     try {

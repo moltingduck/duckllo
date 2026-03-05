@@ -256,7 +256,7 @@ function renderBoard() {
           body: { column_name: col, position }
         });
         await loadBoard();
-      } catch (err) { console.error(err); }
+      } catch (err) { showToast(err.message); }
     });
 
     colCards.forEach(card => {
@@ -408,9 +408,11 @@ document.getElementById('save-card-btn').addEventListener('click', async () => {
     labels
   };
 
-  await api(`/projects/${currentProject.id}/cards/${currentCard.id}`, { method: 'PATCH', body: updates });
-  closeAllModals();
-  await loadBoard();
+  try {
+    await api(`/projects/${currentProject.id}/cards/${currentCard.id}`, { method: 'PATCH', body: updates });
+    closeAllModals();
+    await loadBoard();
+  } catch (err) { showToast(err.message); }
 });
 
 // Delete card
@@ -539,6 +541,19 @@ document.addEventListener('keydown', (e) => {
 document.querySelectorAll('.modal-content').forEach(el => {
   el.addEventListener('click', (e) => e.stopPropagation());
 });
+
+// ── Toast Notifications ─────────────────────────────────────────────────
+function showToast(message, type = 'error') {
+  const toast = document.createElement('div');
+  toast.className = `toast toast-${type}`;
+  toast.textContent = message;
+  document.body.appendChild(toast);
+  requestAnimationFrame(() => toast.classList.add('show'));
+  setTimeout(() => {
+    toast.classList.remove('show');
+    setTimeout(() => toast.remove(), 300);
+  }, 5000);
+}
 
 // ── Utils ────────────────────────────────────────────────────────────────
 function escHtml(str) {
