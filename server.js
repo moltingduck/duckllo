@@ -416,6 +416,51 @@ app.post('/api/projects/:projectId/cards/:cardId/comments', authenticate, requir
   res.json({ id, card_id: req.params.cardId, user_id: req.user.id, content, comment_type: comment_type || 'comment' });
 });
 
+// ── Activity Feed ───────────────────────────────────────────────────────
+
+app.get('/api/projects/:projectId/activity', authenticate, requireProjectAccess, (req, res) => {
+  const rawSince = req.query.since || new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+  // Normalize to SQLite datetime format: "YYYY-MM-DD HH:MM:SS"
+  const since = rawSince.replace('T', ' ').replace('Z', '').replace(/\.\d+$/, '');
+  const limit = Math.min(parseInt(req.query.limit) || 50, 200);
+
+  const updatedCards = db.prepare(`
+    SELECT c.id, c.title, c.card_type, c.column_name, c.priority, c.testing_status,
+           c.updated_at, c.created_at, cr.username as creator_username,
+           'card_updated' as event_type
+    FROM cards c
+    LEFT JOIN users cr ON c.created_by = cr.id
+    WHERE c.project_id = ? AND c.updated_at > ?
+    ORDER BY c.updated_at DESC
+    LIMIT ?
+  `).all(req.params.projectId, since, limit);
+
+  const newComments = db.prepare(`
+    SELECT cc.id, cc.card_id, cc.content, cc.comment_type, cc.created_at,
+           u.username, u.display_name,
+           c.title as card_title,
+           'comment_added' as event_type
+    FROM card_comments cc
+    JOIN cards c ON cc.card_id = c.id
+    LEFT JOIN users u ON cc.user_id = u.id
+    WHERE c.project_id = ? AND cc.created_at > ?
+    ORDER BY cc.created_at DESC
+    LIMIT ?
+  `).all(req.params.projectId, since, limit);
+
+  // Merge and sort by time
+  const events = [
+    ...updatedCards.map(c => ({ ...c, timestamp: c.updated_at })),
+    ...newComments.map(c => ({ ...c, timestamp: c.created_at }))
+  ].sort((a, b) => b.timestamp.localeCompare(a.timestamp)).slice(0, limit);
+
+  res.json({
+    since,
+    count: events.length,
+    events
+  });
+});
+
 // ── Start Server ────────────────────────────────────────────────────────
 
 app.listen(PORT, () => {

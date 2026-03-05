@@ -116,6 +116,29 @@ curl -s -X POST "http://localhost:3000/api/projects/$PID/cards/$CID/move" \
   -d '{"column_name":"Review","position":0}'
 ```
 
+## Watching the Kanban
+
+Agents should watch the kanban for new tasks assigned to them. Use `watch.js`:
+
+```bash
+# Continuous watch (prints new events every 15s)
+node watch.js --key $KEY --project $PID
+
+# One-shot check
+node watch.js --key $KEY --project $PID --once
+
+# JSON output for programmatic use
+node watch.js --key $KEY --project $PID --json --once
+```
+
+Or poll the activity API directly:
+```bash
+curl "http://localhost:3000/api/projects/$PID/activity?since=<last-check-timestamp>" \
+  -H "Authorization: Bearer $KEY"
+```
+
+See `SKILL.md` for detailed watcher documentation and integration patterns.
+
 ## Lessons Learned
 
 These are patterns discovered during development. Update this section as new lessons emerge.

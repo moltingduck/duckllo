@@ -273,6 +273,63 @@ curl -s -X POST "$API/cards/$CID/move" \
   -d '{"column_name":"Done","position":0}'
 ```
 
+## Watching for Updates
+
+### Activity Feed API
+
+```
+GET /api/projects/<pid>/activity?since=<ISO-timestamp>&limit=50
+```
+
+Returns card updates and new comments since the given timestamp. Events are sorted newest-first.
+
+```bash
+curl -H "Authorization: Bearer $KEY" \
+  "http://localhost:3000/api/projects/<pid>/activity?since=2026-03-05T00:00:00Z"
+```
+
+### Watcher Script
+
+Run `watch.js` to poll the kanban for changes:
+
+```bash
+# Watch continuously (prints new events every 15s)
+node watch.js --key duckllo_xxx --project <pid>
+
+# Check once and exit
+node watch.js --key duckllo_xxx --project <pid> --once
+
+# JSON output (pipe to jq or other tools)
+node watch.js --key duckllo_xxx --project <pid> --json
+
+# Custom poll interval (30 seconds)
+node watch.js --key duckllo_xxx --project <pid> --interval 30
+
+# Using environment variables
+DUCKLLO_KEY=duckllo_xxx DUCKLLO_PROJECT=<pid> node watch.js
+```
+
+Output looks like:
+```
+[7:28:19 AM] CARD FEATURE in Done: Express + SQLite backend [passing]
+[7:49:21 AM] COMMENT by Claude Opus 4.6 on "API key system": Git commit: bbc891d ...
+[8:02:33 AM] CARD TASK in Backlog: CLAUDE.md - Development Rules [passing]
+```
+
+### Agent Integration Pattern
+
+Run the watcher as a background process and react to events:
+
+```bash
+# Start watcher in background, pipe to a log
+node watch.js --key $KEY --project $PID --json >> /tmp/kanban-events.log &
+
+# In your agent loop, tail the log for new assignments
+tail -f /tmp/kanban-events.log | while read line; do
+  echo "$line" | jq -r 'select(.event_type == "card_updated" and .column_name == "Todo")'
+done
+```
+
 ## Error Handling
 
 All errors return JSON with an `error` field:
