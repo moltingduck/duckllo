@@ -124,6 +124,36 @@ textarea { resize: vertical; font-family: inherit; }
   min-height: 20px;
 }
 
+.success-msg {
+  color: var(--success);
+  font-size: 0.85rem;
+  margin-top: 4px;
+  min-height: 20px;
+}
+
+.forgot-link {
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+  text-align: center;
+  text-decoration: none;
+  transition: color 0.2s;
+}
+
+.forgot-link:hover {
+  color: var(--primary);
+}
+
+.reset-hint {
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+  line-height: 1.4;
+  padding: 10px 12px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  border-left: 3px solid var(--warning);
+}
+
 /* Buttons */
 .btn {
   padding: 10px 20px;

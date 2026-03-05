@@ -24,14 +24,38 @@ const authScreen = document.getElementById('auth-screen');
 const mainScreen = document.getElementById('main-screen');
 const authError = document.getElementById('auth-error');
 
+const authSuccess = document.getElementById('auth-success');
+
+function showAuthForm(form) {
+  document.getElementById('login-form').style.display = 'none';
+  document.getElementById('register-form').style.display = 'none';
+  document.getElementById('reset-form').style.display = 'none';
+  document.querySelector('.auth-tabs').style.display = form === 'reset' ? 'none' : 'flex';
+  if (form === 'login') document.getElementById('login-form').style.display = 'flex';
+  else if (form === 'register') document.getElementById('register-form').style.display = 'flex';
+  else if (form === 'reset') document.getElementById('reset-form').style.display = 'flex';
+  authError.textContent = '';
+  authSuccess.textContent = '';
+}
+
 document.querySelectorAll('.auth-tab').forEach(tab => {
   tab.addEventListener('click', () => {
     document.querySelectorAll('.auth-tab').forEach(t => t.classList.remove('active'));
     tab.classList.add('active');
-    document.getElementById('login-form').style.display = tab.dataset.tab === 'login' ? 'flex' : 'none';
-    document.getElementById('register-form').style.display = tab.dataset.tab === 'register' ? 'flex' : 'none';
-    authError.textContent = '';
+    showAuthForm(tab.dataset.tab);
   });
+});
+
+document.getElementById('forgot-password-link').addEventListener('click', (e) => {
+  e.preventDefault();
+  showAuthForm('reset');
+});
+
+document.getElementById('back-to-login-link').addEventListener('click', (e) => {
+  e.preventDefault();
+  document.querySelectorAll('.auth-tab').forEach(t => t.classList.remove('active'));
+  document.querySelector('[data-tab="login"]').classList.add('active');
+  showAuthForm('login');
 });
 
 document.getElementById('login-form').addEventListener('submit', async (e) => {
@@ -63,6 +87,32 @@ document.getElementById('register-form').addEventListener('submit', async (e) =>
     localStorage.setItem('duckllo_token', token);
     currentUser = data.user;
     showApp();
+  } catch (err) { authError.textContent = err.message; }
+});
+
+document.getElementById('reset-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  authError.textContent = '';
+  authSuccess.textContent = '';
+  try {
+    await api('/auth/reset-password', {
+      method: 'POST',
+      body: {
+        username: document.getElementById('reset-username').value,
+        recovery_code: document.getElementById('reset-code').value,
+        new_password: document.getElementById('reset-password').value
+      }
+    });
+    authSuccess.textContent = 'Password reset successfully. You can now login with your new password.';
+    document.getElementById('reset-code').value = '';
+    document.getElementById('reset-password').value = '';
+    setTimeout(() => {
+      document.querySelectorAll('.auth-tab').forEach(t => t.classList.remove('active'));
+      document.querySelector('[data-tab="login"]').classList.add('active');
+      showAuthForm('login');
+      document.getElementById('login-username').value = document.getElementById('reset-username').value;
+      document.getElementById('reset-username').value = '';
+    }, 2000);
   } catch (err) { authError.textContent = err.message; }
 });
 

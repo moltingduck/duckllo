@@ -21,6 +21,7 @@
           <input type="text" id="login-username" placeholder="Username" required>
           <input type="password" id="login-password" placeholder="Password" required>
           <button type="submit" class="btn btn-primary">Login</button>
+          <a href="#" id="forgot-password-link" class="forgot-link">Forgot password?</a>
         </form>
         <form id="register-form" class="auth-form" style="display:none">
           <input type="text" id="reg-username" placeholder="Username" required>
@@ -28,7 +29,16 @@
           <input type="password" id="reg-password" placeholder="Password (6+ chars)" required>
           <button type="submit" class="btn btn-primary">Register</button>
         </form>
+        <form id="reset-form" class="auth-form" style="display:none">
+          <p class="reset-hint">Contact your project admin to get a recovery code, then enter it below to reset your password.</p>
+          <input type="text" id="reset-username" placeholder="Username" required>
+          <input type="text" id="reset-code" placeholder="Recovery code" required>
+          <input type="password" id="reset-password" placeholder="New password (6+ chars)" required>
+          <button type="submit" class="btn btn-primary">Reset Password</button>
+          <a href="#" id="back-to-login-link" class="forgot-link">Back to login</a>
+        </form>
         <div id="auth-error" class="error-msg"></div>
+        <div id="auth-success" class="success-msg"></div>
       </div>
     </div>
 
