@@ -116,6 +116,15 @@ async function initDB() {
       created_at TIMESTAMP DEFAULT NOW(),
       expires_at TIMESTAMP NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS recovery_codes (
+      id VARCHAR(36) PRIMARY KEY,
+      user_id VARCHAR(36) NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      code_hash TEXT NOT NULL,
+      expires_at TIMESTAMP NOT NULL,
+      used BOOLEAN DEFAULT FALSE,
+      created_at TIMESTAMP DEFAULT NOW()
+    );
   `);
 }
 
@@ -225,6 +234,42 @@ app.post('/api/auth/logout', authenticate, async (req, res) => {
   const token = req.headers.authorization?.replace('Bearer ', '');
   await pool.query('DELETE FROM sessions WHERE token = $1', [token]);
   res.json({ ok: true });
+});
+
+app.post('/api/auth/reset-password', async (req, res) => {
+  try {
+    const { username, recovery_code, new_password } = req.body;
+    if (!username || !recovery_code || !new_password) {
+      return res.status(400).json({ error: 'username, recovery_code, and new_password required' });
+    }
+    if (new_password.length < 6) return res.status(400).json({ error: 'Password must be at least 6 characters' });
+
+    const { rows: users } = await pool.query('SELECT id FROM users WHERE username = $1', [username]);
+    if (!users[0]) return res.status(404).json({ error: 'User not found' });
+    const userId = users[0].id;
+
+    const { rows: codes } = await pool.query(
+      'SELECT * FROM recovery_codes WHERE user_id = $1 AND used = FALSE AND expires_at > NOW() ORDER BY created_at DESC',
+      [userId]
+    );
+
+    let matched = null;
+    for (const code of codes) {
+      if (bcrypt.compareSync(recovery_code, code.code_hash)) {
+        matched = code;
+        break;
+      }
+    }
+    if (!matched) return res.status(401).json({ error: 'Invalid or expired recovery code' });
+
+    const password_hash = bcrypt.hashSync(new_password, 10);
+    await pool.query('UPDATE users SET password_hash = $1 WHERE id = $2', [password_hash, userId]);
+    await pool.query('UPDATE recovery_codes SET used = TRUE WHERE id = $1', [matched.id]);
+    // Invalidate all existing sessions
+    await pool.query('DELETE FROM sessions WHERE user_id = $1', [userId]);
+
+    res.json({ ok: true, message: 'Password reset successfully. All sessions invalidated.' });
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 // ── Project Routes ──────────────────────────────────────────────────────
@@ -497,7 +542,46 @@ app.get('/api/projects/:projectId/activity', authenticate, requireProjectAccess,
 
 // ── Start Server ────────────────────────────────────────────────────────
 
+async function generateRecoveryCode(username) {
+  await initDB();
+  const { rows } = await pool.query('SELECT id FROM users WHERE username = $1', [username]);
+  if (!rows[0]) {
+    console.error(`Error: User "${username}" not found.`);
+    process.exit(1);
+  }
+
+  const crypto = require('crypto');
+  const code = crypto.randomBytes(16).toString('hex');
+  const code_hash = bcrypt.hashSync(code, 10);
+  const id = uuidv4();
+  const expires_at = new Date(Date.now() + 60 * 60 * 1000).toISOString(); // 1 hour
+
+  await pool.query(
+    'INSERT INTO recovery_codes (id, user_id, code_hash, expires_at) VALUES ($1, $2, $3, $4)',
+    [id, rows[0].id, code_hash, expires_at]
+  );
+
+  console.log(`Recovery code for "${username}":`);
+  console.log(`  Code: ${code}`);
+  console.log(`  Expires: ${new Date(expires_at).toLocaleString()}`);
+  console.log(`\nUser resets password with:`);
+  console.log(`  POST /api/auth/reset-password`);
+  console.log(`  {"username":"${username}","recovery_code":"${code}","new_password":"<new>"}`);
+  await pool.end();
+}
+
 async function start() {
+  const args = process.argv.slice(2);
+  const recoverIdx = args.indexOf('--recover');
+  if (recoverIdx !== -1) {
+    const username = args[recoverIdx + 1];
+    if (!username) {
+      console.error('Usage: node server.js --recover <username>');
+      process.exit(1);
+    }
+    return generateRecoveryCode(username);
+  }
+
   await initDB();
   app.listen(PORT, () => {
     console.log(`Duckllo running on http://localhost:${PORT}`);
