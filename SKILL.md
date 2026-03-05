@@ -1,0 +1,293 @@
+# Duckllo Agent Skill Guide
+
+You are interacting with **Duckllo**, a Kanban board for tracking features, bugs, and tasks. This document tells you how to use the Duckllo API to manage cards on the board.
+
+## Quick Start
+
+**Base URL**: `http://localhost:3000`
+
+All API requests require authentication via the `Authorization` header:
+```
+Authorization: Bearer <your_api_key>
+```
+
+Your API key starts with `duckllo_` and is scoped to a specific project. You do not need to specify the project in the header -- it is inferred from the key. However, you must include the `project_id` in the URL path.
+
+## Authentication
+
+### Using an API Key (recommended for agents)
+
+You should have been given an API key that looks like `duckllo_abc123...`. Use it as a Bearer token:
+
+```bash
+curl -H "Authorization: Bearer duckllo_<key>" http://localhost:3000/api/projects
+```
+
+If you don't have a key, ask the project owner to generate one in **Settings > API Keys**.
+
+### Using Username/Password (for bootstrapping)
+
+```bash
+# Register
+curl -X POST http://localhost:3000/api/auth/register \
+  -H "Content-Type: application/json" \
+  -d '{"username": "my_agent", "password": "secret123", "display_name": "My Agent"}'
+
+# Login (returns a session token)
+curl -X POST http://localhost:3000/api/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"username": "my_agent", "password": "secret123"}'
+# Response: {"token": "...", "user": {...}}
+```
+
+## Core Concepts
+
+- **Project**: A board with columns. Default columns: `Backlog`, `Todo`, `In Progress`, `Review`, `Done`.
+- **Card**: An item on the board. Has a type, priority, column, testing status, and optional demo GIF.
+- **Card types**: `feature`, `bug`, `task`, `improvement`
+- **Priorities**: `low`, `medium`, `high`, `critical`
+- **Testing status**: `untested`, `passing`, `failing`, `partial`
+
+## API Reference
+
+All requests use JSON. Set `Content-Type: application/json` for POST/PATCH requests.
+Replace `<pid>` with the project ID and `<cid>` with the card ID.
+
+### List Projects
+
+```
+GET /api/projects
+```
+
+Returns all projects you have access to. Use the `id` field as `<pid>` in other calls.
+
+### List Cards
+
+```
+GET /api/projects/<pid>/cards
+```
+
+Returns all cards in the project. Each card has:
+```json
+{
+  "id": "uuid",
+  "title": "Fix login bug",
+  "description": "Login fails when...",
+  "card_type": "bug",
+  "column_name": "In Progress",
+  "priority": "high",
+  "testing_status": "failing",
+  "testing_result": "test output here...",
+  "demo_gif_url": "/uploads/abc.gif",
+  "labels": ["auth", "urgent"],
+  "position": 0
+}
+```
+
+### Create a Card
+
+```
+POST /api/projects/<pid>/cards
+```
+
+Body:
+```json
+{
+  "title": "Implement search feature",
+  "description": "Add full-text search across card titles and descriptions",
+  "card_type": "feature",
+  "column_name": "Todo",
+  "priority": "medium",
+  "labels": ["search", "v2"]
+}
+```
+
+Required: `title`. Everything else has sensible defaults (type=feature, column=Backlog, priority=medium).
+
+### Update a Card
+
+```
+PATCH /api/projects/<pid>/cards/<cid>
+```
+
+Send only the fields you want to change:
+```json
+{
+  "testing_status": "passing",
+  "testing_result": "All 5 tests passed.\n  [PASS] test_login\n  [PASS] test_logout",
+  "column_name": "Review"
+}
+```
+
+Updatable fields: `title`, `description`, `card_type`, `column_name`, `position`, `priority`, `assignee_id`, `testing_status`, `testing_result`, `demo_gif_url`, `labels`.
+
+### Move a Card
+
+```
+POST /api/projects/<pid>/cards/<cid>/move
+```
+
+Body:
+```json
+{
+  "column_name": "Done",
+  "position": 0
+}
+```
+
+Valid columns: `Backlog`, `Todo`, `In Progress`, `Review`, `Done` (or whatever the project is configured with).
+
+### Delete a Card
+
+```
+DELETE /api/projects/<pid>/cards/<cid>
+```
+
+### Add a Comment
+
+```
+POST /api/projects/<pid>/cards/<cid>/comments
+```
+
+Body:
+```json
+{
+  "content": "Fixed the race condition. Root cause was...",
+  "comment_type": "agent_update"
+}
+```
+
+Comment types: `comment` (default), `agent_update`, `test_result`.
+
+### List Comments
+
+```
+GET /api/projects/<pid>/cards/<cid>/comments
+```
+
+### Upload Demo GIF
+
+```
+POST /api/projects/<pid>/cards/<cid>/upload
+Content-Type: multipart/form-data
+```
+
+```bash
+curl -X POST \
+  -H "Authorization: Bearer duckllo_<key>" \
+  -F "file=@demo.gif" \
+  http://localhost:3000/api/projects/<pid>/cards/<cid>/upload
+```
+
+Accepted formats: `.gif`, `.png`, `.jpg`, `.jpeg`, `.webp`, `.mp4`. Max 50MB.
+
+## Typical Agent Workflows
+
+### 1. Report a bug you found
+
+```bash
+# Create the bug card
+curl -X POST http://localhost:3000/api/projects/<pid>/cards \
+  -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
+  -d '{
+    "title": "Memory leak in connection pool",
+    "description": "RSS grows 2MB/hour under sustained load",
+    "card_type": "bug",
+    "column_name": "Todo",
+    "priority": "critical",
+    "labels": ["memory", "backend"]
+  }'
+```
+
+### 2. Update a card with test results
+
+```bash
+curl -X PATCH http://localhost:3000/api/projects/<pid>/cards/<cid> \
+  -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
+  -d '{
+    "testing_status": "passing",
+    "testing_result": "Suite: AuthTests\n  [PASS] login\n  [PASS] register\n  [PASS] logout\n\n3/3 passed (0.4s)"
+  }'
+```
+
+### 3. Move a card to Done after fixing it
+
+```bash
+curl -X POST http://localhost:3000/api/projects/<pid>/cards/<cid>/move \
+  -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
+  -d '{"column_name": "Done", "position": 0}'
+```
+
+### 4. Add a diagnostic comment
+
+```bash
+curl -X POST http://localhost:3000/api/projects/<pid>/cards/<cid>/comments \
+  -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
+  -d '{
+    "content": "Root cause: unclosed DB connections in pool.js:142. Fix: add cleanup in reconnect handler.",
+    "comment_type": "agent_update"
+  }'
+```
+
+### 5. Upload a demo GIF after implementing a feature
+
+```bash
+curl -X POST \
+  -H "Authorization: Bearer $KEY" \
+  -F "file=@feature-demo.gif" \
+  http://localhost:3000/api/projects/<pid>/cards/<cid>/upload
+```
+
+### 6. Full workflow: create card, implement, test, move to done
+
+```bash
+PID="<project-id>"
+KEY="duckllo_<your-key>"
+API="http://localhost:3000/api/projects/$PID"
+
+# 1. Create card
+CID=$(curl -s -X POST "$API/cards" \
+  -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
+  -d '{"title":"Add search","card_type":"feature","column_name":"In Progress"}' \
+  | jq -r '.id')
+
+# 2. ... do the work ...
+
+# 3. Update with test results
+curl -s -X PATCH "$API/cards/$CID" \
+  -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
+  -d '{"testing_status":"passing","testing_result":"All tests pass"}'
+
+# 4. Upload demo
+curl -s -X POST "$API/cards/$CID/upload" \
+  -H "Authorization: Bearer $KEY" -F "file=@demo.gif"
+
+# 5. Add completion comment
+curl -s -X POST "$API/cards/$CID/comments" \
+  -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
+  -d '{"content":"Feature implemented and tested.","comment_type":"agent_update"}'
+
+# 6. Move to Done
+curl -s -X POST "$API/cards/$CID/move" \
+  -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
+  -d '{"column_name":"Done","position":0}'
+```
+
+## Error Handling
+
+All errors return JSON with an `error` field:
+```json
+{"error": "Authentication required"}
+{"error": "Card not found"}
+{"error": "Invalid column. Valid columns: Backlog, Todo, In Progress, Review, Done"}
+```
+
+HTTP status codes: `400` (bad request), `401` (auth required), `403` (forbidden), `404` (not found), `409` (conflict).
+
+## Notes
+
+- API keys are project-scoped. One key works for one project only.
+- The `testing_result` field is displayed in monospace font -- format it like terminal output for readability.
+- Use `\n` for newlines in JSON string fields.
+- Card `position` is zero-indexed within a column. Use `0` to place at top.
+- Labels are stored as a JSON array of strings.
