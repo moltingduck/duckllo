@@ -1,0 +1,42 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: duckllo
+      POSTGRES_USER: duckllo
+      POSTGRES_PASSWORD: duckllo
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    # ports:
+    #   - "5432:5432"  # Uncomment to expose PG externally
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U duckllo"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  app:
+    build: .
+    ports:
+      - "3000:3000"
+    environment:
+      DB_HOST: db
+      DB_PORT: 5432
+      DB_NAME: duckllo
+      DB_USER: duckllo
+      DB_PASSWORD: duckllo
+      PORT: 3000
+    volumes:
+      - uploads:/app/uploads
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:3000').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  pgdata:
+  uploads:
