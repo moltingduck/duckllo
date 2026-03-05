@@ -14,7 +14,7 @@ This file is the single source of truth for how any agent (Claude or otherwise) 
 
 Every piece of work follows this flow:
 
-1. **Before coding**: Create a card in `Todo` with clear title, description, type, and priority.
+1. **Before coding**: Create a card in `Todo` with clear title, description, type, and priority. Add appropriate labels.
 2. **Start work**: Move card to `In Progress`.
 3. **While coding**: Add comments to the card describing approach, decisions, and blockers.
 4. **After coding**: Update the card with:
@@ -26,6 +26,28 @@ Every piece of work follows this flow:
 6. **Done**: Only move to `Done` after tests pass and demo media is attached.
 
 Never skip steps. A card in `Done` without test results and a demo GIF is incomplete.
+
+## Quality Gate Rules (server-enforced)
+
+The server **rejects** moves to Review/Done (HTTP 422) if requirements are not met:
+
+### All cards need at least ONE of:
+- A **test result** (`testing_result` with actual output)
+- A **demo GIF/media** (uploaded via the card)
+
+### UI/UX cards MUST have demo media:
+Cards with any of these labels **must** have a demo GIF/media — test results alone are not enough:
+`ui`, `ux`, `ui/ux`, `frontend`, `user-operation`, `user-facing`, `demo-required`
+
+### Bug fix / performance cards:
+Only need a **test result** proving the fix works.
+
+### Label your cards correctly:
+- UI features, new pages, layout changes → add `ui` or `frontend` label
+- User-facing workflows → add `user-operation` label
+- Backend/API/performance/infrastructure → no special label needed (test result suffices)
+
+Every new project auto-creates a pinned "Quality Gate Rules" card in Backlog for reference.
 
 ## Development Rules
 
