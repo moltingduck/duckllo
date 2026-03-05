@@ -341,6 +341,17 @@ All errors return JSON with an `error` field:
 
 HTTP status codes: `400` (bad request), `401` (auth required), `403` (forbidden), `404` (not found), `409` (conflict).
 
+## Deployment
+
+Run with Docker Compose (recommended):
+```bash
+docker compose up --build -d
+```
+
+This starts PostgreSQL + the app on port 3000. Data persists in Docker volumes (`pgdata`, `uploads`).
+
+To run locally without Docker, set `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD` env vars pointing to a PostgreSQL instance.
+
 ## Notes
 
 - API keys are project-scoped. One key works for one project only.

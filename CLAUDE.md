@@ -37,7 +37,7 @@ Never skip steps. A card in `Done` without test results and a demo GIF is incomp
 - Never commit secrets, `.env` files, or database files.
 
 ### Code Style
-- Backend: Node.js + Express + better-sqlite3. No ORMs.
+- Backend: Node.js + Express + PostgreSQL (pg). No ORMs.
 - Frontend: Vanilla HTML/CSS/JS in `public/`. No frameworks unless owner approves.
 - Keep it simple. No over-engineering. No premature abstraction.
 - SQL: Use parameterized queries. Never interpolate user input into SQL.
@@ -56,7 +56,7 @@ Never skip steps. A card in `Done` without test results and a demo GIF is incomp
 
 ### File Structure
 ```
-server.js          # Backend API (Express + SQLite)
+server.js          # Backend API (Express + PostgreSQL)
 public/            # Frontend (HTML/CSS/JS)
   index.html
   style.css
@@ -69,6 +69,9 @@ docs/              # Documentation and media
   gifs/            # E2E test GIFs
   demo/            # CDP demo GIFs
 uploads/           # User-uploaded media (gitignored)
+Dockerfile         # App container (node:20-slim)
+docker-compose.yml # App + PostgreSQL stack
+.dockerignore      # Docker build exclusions
 SKILL.md           # API reference for agents
 CLAUDE.md          # This file - development rules
 ```
@@ -145,7 +148,8 @@ These are patterns discovered during development. Update this section as new les
 
 - **Puppeteer + modals**: `waitForSelector` with `{ visible: true }` doesn't work reliably for elements toggled via `style.display`. Use `waitForFunction` to check computed display instead.
 - **Puppeteer + form submission**: `page.type()` can race with modal transitions. Prefer `page.evaluate()` to set values directly for reliability. Use `page.type()` only when you need visible typing for demos.
-- **SQLite WAL mode**: Enable `PRAGMA journal_mode = WAL` for concurrent reads. The DB file must be on a local filesystem (not NFS).
+- **PostgreSQL JSONB**: `columns_config`, `labels`, and `permissions` are JSONB columns — the `pg` driver returns native JS objects/arrays, no `JSON.parse()` needed on reads. Always `JSON.stringify()` when inserting.
+- **PostgreSQL transactions**: Use `const client = await pool.connect()` then `client.query('BEGIN')` / `COMMIT` / `ROLLBACK` for multi-step operations like card moves.
 - **API key auth**: Bcrypt comparison for every request is slow with many keys. If this becomes a bottleneck, add a key prefix index to narrow the search.
 - **GIF recording**: Use `gif-encoder-2` with `neuquant` algorithm and quality 10 for good size/quality balance. Capture PNGs, decode with `pngjs`, then encode.
 - **CDP testing**: Always use a unique `--user-data-dir` per test run to avoid conflicts with other Chrome sessions. Connect via `puppeteer.connect({ browserURL })` to reuse an existing Chromium instance.
