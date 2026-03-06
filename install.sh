@@ -37,6 +37,7 @@ fi
 MODE=""
 TARGET_DIR=""
 DUCKLLO_URL="http://localhost:3000"
+FORCE=false
 
 while [[ $# -gt 0 ]]; do
   case $1 in
@@ -48,12 +49,14 @@ while [[ $# -gt 0 ]]; do
       fi
       shift ;;
     --url)     DUCKLLO_URL="$2"; shift 2 ;;
+    --force)   FORCE=true; shift ;;
     -h|--help)
-      echo "Usage: ./install.sh [--global | --project [path]] [--url http://host:port]"
+      echo "Usage: ./install.sh [--global | --project [path]] [--url http://host:port] [--force]"
       echo ""
       echo "  --global         Install to ~/.claude/commands (all projects)"
       echo "  --project [path] Install to .claude/commands in current or given dir"
       echo "  --url URL        Duckllo server URL (default: http://localhost:3000)"
+      echo "  --force          Overwrite existing Duckllo config in CLAUDE.md"
       echo "  (no args)        Interactive mode"
       exit 0 ;;
     *) err "Unknown option: $1"; exit 1 ;;
@@ -145,7 +148,22 @@ All other cards need at least a test result.
 
 if [ -f "$CLAUDE_MD_TARGET" ]; then
   if grep -q "Duckllo Kanban Integration" "$CLAUDE_MD_TARGET" 2>/dev/null; then
-    warn "Duckllo config already exists in $CLAUDE_MD_TARGET — skipping."
+    if [ "$FORCE" = true ]; then
+      # Strip old Duckllo block and rewrite
+      python3 -c "
+import re
+with open('$CLAUDE_MD_TARGET') as f:
+    content = f.read()
+content = re.sub(r'\n## Duckllo Kanban Integration\n.*?(?=\n## |\Z)', '', content, flags=re.DOTALL)
+with open('$CLAUDE_MD_TARGET', 'w') as f:
+    f.write(content.rstrip())
+" 2>/dev/null
+      echo "$CONFIG_BLOCK" >> "$CLAUDE_MD_TARGET"
+      ok "Overwrote Duckllo config in $CLAUDE_MD_TARGET"
+    else
+      warn "Duckllo config already exists in $CLAUDE_MD_TARGET — skipping."
+      warn "Use --force to overwrite."
+    fi
   else
     echo "$CONFIG_BLOCK" >> "$CLAUDE_MD_TARGET"
     ok "Appended Duckllo config to $CLAUDE_MD_TARGET"
