@@ -352,6 +352,73 @@ This starts PostgreSQL + the app on port 3000. Data persists in Docker volumes (
 
 To run locally without Docker, set `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD` env vars pointing to a PostgreSQL instance.
 
+## Installing the Skill for Claude Agents
+
+### Quick Install (recommended)
+
+```bash
+cd /path/to/duckllo
+./install.sh
+```
+
+Interactive installer — prompts for global vs project scope, server URL, project ID, API key. See below for manual steps.
+
+### Method 1: Project-Level (agents in one repo)
+
+```bash
+# From your target project directory:
+mkdir -p .claude/commands
+cp /path/to/duckllo/SKILL.md .claude/commands/duckllo.md
+```
+
+Then add to your project's `CLAUDE.md`:
+
+```markdown
+## Duckllo Kanban
+- Server: http://localhost:3000
+- Project ID: <your-project-id>
+- API Key: duckllo_<your-key>
+Run /duckllo for the full API. Always create a kanban card before coding.
+```
+
+### Method 2: User-Level (all projects on this machine)
+
+```bash
+mkdir -p ~/.claude/commands
+cp /path/to/duckllo/SKILL.md ~/.claude/commands/duckllo.md
+```
+
+Add Duckllo config to `~/.claude/CLAUDE.md` (same content as above).
+
+### Method 3: Per-Agent (CI / automation)
+
+Set environment variables and pass instructions at launch:
+
+```bash
+export DUCKLLO_URL="http://localhost:3000"
+export DUCKLLO_PROJECT="<project-id>"
+export DUCKLLO_KEY="duckllo_<key>"
+```
+
+### After Installation
+
+Start a new Claude Code session and verify:
+
+```
+/duckllo                    — Shows the full API reference
+"list cards on kanban"      — Agent calls the API and shows your board
+"create a card for X"       — Agent creates a card via the API
+```
+
+The `/duckllo` slash command is available anywhere Claude Code runs, as long as the `duckllo.md` file is in the appropriate `.claude/commands/` directory.
+
+### File Paths Reference
+
+| Scope | Slash command file | Config file |
+|-------|-------------------|-------------|
+| Project | `<project>/.claude/commands/duckllo.md` | `<project>/CLAUDE.md` |
+| User (global) | `~/.claude/commands/duckllo.md` | `~/.claude/CLAUDE.md` |
+
 ## Notes
 
 - API keys are project-scoped. One key works for one project only.
