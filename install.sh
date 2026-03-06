@@ -95,6 +95,18 @@ fi
 
 # ── Install slash command ────────────────────────────────────────────────
 
+# ── Ask for developer account name ───────────────────────────────────────
+
+echo ""
+read -rp "Your Duckllo username (the developer/owner account): " DEV_USER
+if [ -z "$DEV_USER" ]; then
+  err "Developer username is required — the agent needs to add you to the project."
+  exit 1
+fi
+ok "Developer account: $DEV_USER"
+
+# ── Install slash command ────────────────────────────────────────────────
+
 mkdir -p "$COMMANDS_DIR"
 cp "$SKILL_FILE" "$COMMANDS_DIR/duckllo.md"
 ok "Installed /duckllo slash command → $COMMANDS_DIR/duckllo.md"
@@ -107,13 +119,15 @@ CONFIG_BLOCK="
 This project uses Duckllo for task tracking. Run \`/duckllo\` for the full API reference.
 
 - **Server**: ${DUCKLLO_URL}
+- **Owner**: ${DEV_USER}
 
 ### First-Time Setup (agent does this automatically)
 On first use, the agent should:
 1. Register an account on the Duckllo server (or login if one exists)
 2. Create a project using the current folder/repo name: \`basename \$(git rev-parse --show-toplevel 2>/dev/null || pwd)\`
 3. Generate an API key for the project
-4. Store the Project ID and API key as a comment in this file
+4. **Add the developer \`${DEV_USER}\` as a project member** (POST /api/projects/<pid>/members with {\"username\":\"${DEV_USER}\",\"role\":\"owner\"})
+5. Store the Project ID and API key as a comment in this file
 
 ### Mandatory Workflow (do not skip)
 1. **Before coding**: Create a card in Todo/In Progress with title, description, type, priority, and labels
