@@ -110,14 +110,104 @@ ok "Installed /duckllo slash command → $COMMANDS_DIR/duckllo.md"
 # ── Configure server connection ──────────────────────────────────────────
 
 echo ""
-info "Configure Duckllo server connection (press Enter to skip any)."
-echo ""
-
 read -rp "Duckllo server URL [http://localhost:3000]: " DUCKLLO_URL
 DUCKLLO_URL="${DUCKLLO_URL:-http://localhost:3000}"
 
-read -rp "Project ID (from /api/projects): " DUCKLLO_PROJECT
-read -rp "API key (duckllo_...): " DUCKLLO_KEY
+# Check server is reachable
+info "Checking server at $DUCKLLO_URL ..."
+if ! curl -sf "$DUCKLLO_URL" >/dev/null 2>&1; then
+  warn "Cannot reach $DUCKLLO_URL"
+  warn "Start the server first:  cd $DUCKLLO_DIR && docker compose up -d"
+  warn "Skipping auto-registration. You can re-run install.sh later."
+  DUCKLLO_PROJECT=""
+  DUCKLLO_KEY=""
+else
+  ok "Server is reachable"
+
+  # ── Auto-register agent account ──────────────────────────────────────
+
+  echo ""
+  read -rp "Agent username [claude-agent]: " AGENT_USER
+  AGENT_USER="${AGENT_USER:-claude-agent}"
+  read -rsp "Agent password [agent123]: " AGENT_PASS
+  AGENT_PASS="${AGENT_PASS:-agent123}"
+  echo ""
+
+  # Try register, fall back to login
+  RESP=$(curl -s -X POST "$DUCKLLO_URL/api/auth/register" \
+    -H "Content-Type: application/json" \
+    -d "{\"username\":\"$AGENT_USER\",\"password\":\"$AGENT_PASS\",\"display_name\":\"$AGENT_USER\"}" 2>/dev/null)
+  TOKEN=$(echo "$RESP" | python3 -c "import sys,json; print(json.load(sys.stdin).get('token',''))" 2>/dev/null || echo "")
+
+  if [ -z "$TOKEN" ]; then
+    # Already registered — login
+    RESP=$(curl -s -X POST "$DUCKLLO_URL/api/auth/login" \
+      -H "Content-Type: application/json" \
+      -d "{\"username\":\"$AGENT_USER\",\"password\":\"$AGENT_PASS\"}" 2>/dev/null)
+    TOKEN=$(echo "$RESP" | python3 -c "import sys,json; print(json.load(sys.stdin).get('token',''))" 2>/dev/null || echo "")
+  fi
+
+  if [ -z "$TOKEN" ]; then
+    err "Failed to register/login as $AGENT_USER. Check credentials."
+    DUCKLLO_PROJECT=""
+    DUCKLLO_KEY=""
+  else
+    ok "Logged in as $AGENT_USER"
+
+    # ── Auto-detect project name from folder/repo ────────────────────
+
+    if [ "$MODE" = "project" ]; then
+      REPO_NAME=$(cd "$TARGET_DIR" && basename "$(git rev-parse --show-toplevel 2>/dev/null || pwd)")
+    else
+      REPO_NAME=$(basename "$(git rev-parse --show-toplevel 2>/dev/null || pwd)")
+    fi
+
+    info "Project name (from folder): $REPO_NAME"
+
+    # Find or create project
+    DUCKLLO_PROJECT=$(curl -s "$DUCKLLO_URL/api/projects" \
+      -H "Authorization: Bearer $TOKEN" \
+      | python3 -c "
+import sys,json
+projects = json.load(sys.stdin)
+match = [p for p in projects if p['name'] == '$REPO_NAME']
+print(match[0]['id'] if match else '')
+" 2>/dev/null || echo "")
+
+    if [ -n "$DUCKLLO_PROJECT" ]; then
+      ok "Found existing project: $REPO_NAME ($DUCKLLO_PROJECT)"
+    else
+      info "Creating project: $REPO_NAME"
+      DUCKLLO_PROJECT=$(curl -s -X POST "$DUCKLLO_URL/api/projects" \
+        -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+        -d "{\"name\":\"$REPO_NAME\"}" \
+        | python3 -c "import sys,json; print(json.load(sys.stdin).get('id',''))" 2>/dev/null || echo "")
+
+      if [ -n "$DUCKLLO_PROJECT" ]; then
+        ok "Created project: $REPO_NAME ($DUCKLLO_PROJECT)"
+      else
+        err "Failed to create project"
+        DUCKLLO_PROJECT=""
+      fi
+    fi
+
+    # ── Generate API key ───────────────────────────────────────────────
+
+    DUCKLLO_KEY=""
+    if [ -n "$DUCKLLO_PROJECT" ]; then
+      KEY_RESP=$(curl -s -X POST "$DUCKLLO_URL/api/projects/$DUCKLLO_PROJECT/api-keys" \
+        -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+        -d "{\"label\":\"$AGENT_USER @ $REPO_NAME\"}" 2>/dev/null)
+      DUCKLLO_KEY=$(echo "$KEY_RESP" | python3 -c "import sys,json; print(json.load(sys.stdin).get('key',''))" 2>/dev/null || echo "")
+
+      if [ -n "$DUCKLLO_KEY" ]; then
+        ok "Generated API key: ${DUCKLLO_KEY:0:15}..."
+      else
+        warn "Failed to generate API key"
+      fi
+    fi
+  fi
+fi
 
 # ── Write CLAUDE.md config block ─────────────────────────────────────────
 
@@ -128,8 +218,8 @@ This project uses [Duckllo](${DUCKLLO_URL}) for task tracking.
 Run \`/duckllo\` for the full API reference.
 
 - **Server**: ${DUCKLLO_URL}
-- **Project ID**: ${DUCKLLO_PROJECT:-<ask admin for project ID>}
-- **API Key**: ${DUCKLLO_KEY:-<ask admin for API key>}
+- **Project ID**: ${DUCKLLO_PROJECT:-<run install.sh again when server is up>}
+- **API Key**: ${DUCKLLO_KEY:-<run install.sh again when server is up>}
 
 ### Mandatory Workflow (do not skip)
 1. **Before coding**: Create a card in Todo/In Progress with title, description, type, priority, and labels
@@ -147,7 +237,18 @@ All other cards need at least a test result.
 
 if [ -f "$CLAUDE_MD_TARGET" ]; then
   if grep -q "Duckllo Kanban Integration" "$CLAUDE_MD_TARGET" 2>/dev/null; then
-    warn "Duckllo config already exists in $CLAUDE_MD_TARGET — skipping."
+    warn "Duckllo config already exists in $CLAUDE_MD_TARGET — updating..."
+    # Remove old block and replace
+    python3 -c "
+import re
+with open('$CLAUDE_MD_TARGET') as f:
+    content = f.read()
+content = re.sub(r'\n## Duckllo Kanban Integration\n.*?(?=\n## |\Z)', '', content, flags=re.DOTALL)
+with open('$CLAUDE_MD_TARGET', 'w') as f:
+    f.write(content)
+" 2>/dev/null
+    echo "$CONFIG_BLOCK" >> "$CLAUDE_MD_TARGET"
+    ok "Updated Duckllo config in $CLAUDE_MD_TARGET"
   else
     echo "$CONFIG_BLOCK" >> "$CLAUDE_MD_TARGET"
     ok "Appended Duckllo config to $CLAUDE_MD_TARGET"
@@ -155,27 +256,6 @@ if [ -f "$CLAUDE_MD_TARGET" ]; then
 else
   echo "$CONFIG_BLOCK" > "$CLAUDE_MD_TARGET"
   ok "Created $CLAUDE_MD_TARGET with Duckllo config"
-fi
-
-# ── Verify connection ───────────────────────────────────────────────────
-
-echo ""
-if [ -n "$DUCKLLO_URL" ]; then
-  info "Verifying server connection..."
-  if curl -sf "$DUCKLLO_URL" >/dev/null 2>&1; then
-    ok "Server is reachable at $DUCKLLO_URL"
-  else
-    warn "Cannot reach $DUCKLLO_URL — make sure the server is running:"
-    warn "  cd $DUCKLLO_DIR && docker compose up -d"
-  fi
-fi
-
-if [ -n "$DUCKLLO_KEY" ] && [ -n "$DUCKLLO_PROJECT" ]; then
-  info "Verifying API key..."
-  RESP=$(curl -sf "$DUCKLLO_URL/api/projects/$DUCKLLO_PROJECT/cards" \
-    -H "Authorization: Bearer $DUCKLLO_KEY" 2>/dev/null) && \
-    ok "API key is valid — $(echo "$RESP" | python3 -c 'import sys,json; print(len(json.load(sys.stdin)),"cards found")' 2>/dev/null || echo 'connected')" || \
-    warn "API key verification failed — check the key and project ID"
 fi
 
 # ── Done ─────────────────────────────────────────────────────────────────
