@@ -40,9 +40,55 @@ curl -X POST http://localhost:3000/api/auth/login \
 # Response: {"token": "...", "user": {...}}
 ```
 
+### Agent Self-Registration (first time setup)
+
+If you are an agent starting work on a project and no Duckllo project ID or API key is configured, bootstrap yourself:
+
+1. **Register** an account using your agent name (e.g. `claude-opus`)
+2. **Create a project** using the **current folder name** (or git repository name) as the project name. This is the naming convention — every project maps to its directory/repo name so agents across sessions can find the same board.
+3. **Generate an API key** and store it in the project's `CLAUDE.md` for future sessions.
+
+```bash
+# Example: agent working in ~/Projects/my-app
+REPO_NAME=$(basename "$(git rev-parse --show-toplevel 2>/dev/null || pwd)")
+
+# Register (skip if already registered)
+TOKEN=$(curl -s -X POST http://localhost:3000/api/auth/register \
+  -H "Content-Type: application/json" \
+  -d "{\"username\":\"claude-agent\",\"password\":\"agent123\",\"display_name\":\"Claude Agent\"}" \
+  | jq -r '.token // empty')
+
+# If already registered, login instead
+[ -z "$TOKEN" ] && TOKEN=$(curl -s -X POST http://localhost:3000/api/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"username":"claude-agent","password":"agent123"}' | jq -r '.token')
+
+# Check if project already exists (search by repo name)
+PID=$(curl -s http://localhost:3000/api/projects \
+  -H "Authorization: Bearer $TOKEN" \
+  | jq -r ".[] | select(.name == \"$REPO_NAME\") | .id // empty")
+
+# Create project if it doesn't exist
+if [ -z "$PID" ]; then
+  PID=$(curl -s -X POST http://localhost:3000/api/projects \
+    -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+    -d "{\"name\":\"$REPO_NAME\"}" | jq -r '.id')
+fi
+
+# Generate API key
+API_KEY=$(curl -s -X POST "http://localhost:3000/api/projects/$PID/api-keys" \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"label":"Claude Agent"}' | jq -r '.key')
+
+echo "Project: $REPO_NAME ($PID)"
+echo "API Key: $API_KEY"
+```
+
+**Important**: Always use the folder/repo name as the project name. This ensures all agents working on the same codebase share the same kanban board.
+
 ## Core Concepts
 
-- **Project**: A board with columns. Default columns: `Backlog`, `Todo`, `In Progress`, `Review`, `Done`.
+- **Project**: A board named after its folder/repository. Default columns: `Backlog`, `Todo`, `In Progress`, `Review`, `Done`.
 - **Card**: An item on the board. Has a type, priority, column, testing status, and optional demo GIF.
 - **Card types**: `feature`, `bug`, `task`, `improvement`
 - **Priorities**: `low`, `medium`, `high`, `critical`
