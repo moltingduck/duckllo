@@ -1452,6 +1452,69 @@ app.get('/api/projects/:projectId/stats', authenticate, requireProjectAccess, as
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+// ── Export ──────────────────────────────────────────────────────────────
+
+app.get('/api/projects/:projectId/export', authenticate, requireProjectAccess, async (req, res) => {
+  try {
+    let where = 'c.project_id = $1 AND c.archived_at IS NULL';
+    const params = [req.params.projectId];
+    let idx = 2;
+
+    if (req.query.column) { where += ` AND c.column_name = $${idx}`; params.push(req.query.column); idx++; }
+    if (req.query.card_type) { where += ` AND c.card_type = $${idx}`; params.push(req.query.card_type); idx++; }
+    if (req.query.priority) { where += ` AND c.priority = $${idx}`; params.push(req.query.priority); idx++; }
+
+    const { rows } = await pool.query(`
+      SELECT c.title, c.card_type, c.priority, c.column_name, c.description,
+             c.labels, c.due_date, c.testing_status, c.testing_result,
+             c.created_at, c.started_at, c.completed_at,
+             u.username as assignee_username, u.display_name as assignee_name
+      FROM cards c
+      LEFT JOIN users u ON c.assignee_id = u.id
+      WHERE ${where}
+      ORDER BY c.column_name, c.position ASC
+    `, params);
+
+    const format = req.query.format || 'json';
+
+    if (format === 'csv') {
+      const headers = ['title','type','priority','column','assignee','labels','due_date','testing_status','created_at','started_at','completed_at'];
+      const csvEscape = (val) => {
+        if (val === null || val === undefined) return '';
+        const s = String(val);
+        if (s.includes(',') || s.includes('"') || s.includes('\n')) return '"' + s.replace(/"/g, '""') + '"';
+        return s;
+      };
+      let csv = headers.join(',') + '\n';
+      for (const r of rows) {
+        csv += [
+          csvEscape(r.title), csvEscape(r.card_type), csvEscape(r.priority),
+          csvEscape(r.column_name), csvEscape(r.assignee_name || r.assignee_username || ''),
+          csvEscape((r.labels || []).join('; ')),
+          csvEscape(r.due_date ? new Date(r.due_date).toISOString().split('T')[0] : ''),
+          csvEscape(r.testing_status),
+          csvEscape(r.created_at ? new Date(r.created_at).toISOString() : ''),
+          csvEscape(r.started_at ? new Date(r.started_at).toISOString() : ''),
+          csvEscape(r.completed_at ? new Date(r.completed_at).toISOString() : '')
+        ].join(',') + '\n';
+      }
+      res.setHeader('Content-Type', 'text/csv');
+      res.setHeader('Content-Disposition', `attachment; filename="${req.project.name.replace(/[^a-zA-Z0-9]/g, '_')}_export.csv"`);
+      res.send(csv);
+    } else {
+      const data = rows.map(r => ({
+        title: r.title, type: r.card_type, priority: r.priority, column: r.column_name,
+        description: r.description, assignee: r.assignee_name || r.assignee_username || null,
+        labels: r.labels || [], due_date: r.due_date, testing_status: r.testing_status,
+        created_at: r.created_at, started_at: r.started_at, completed_at: r.completed_at
+      }));
+      res.setHeader('Content-Type', 'application/json');
+      res.setHeader('Content-Disposition', `attachment; filename="${req.project.name.replace(/[^a-zA-Z0-9]/g, '_')}_export.json"`);
+      res.json(data);
+    }
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 // ── Activity Feed ───────────────────────────────────────────────────────
 
 app.get('/api/projects/:projectId/activity', authenticate, requireProjectAccess, async (req, res) => {

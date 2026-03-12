@@ -1113,6 +1113,16 @@ document.getElementById('settings-btn').addEventListener('click', async () => {
   document.getElementById('new-key-display').style.display = 'none';
   await loadBugSettings();
 
+  // Export column filter
+  const exportColSelect = document.getElementById('export-column');
+  exportColSelect.innerHTML = '<option value="">All columns</option>';
+  (currentProject.columns_config || []).forEach(col => {
+    const opt = document.createElement('option');
+    opt.value = col;
+    opt.textContent = col;
+    exportColSelect.appendChild(opt);
+  });
+
   // WIP Limits UI
   const wipSection = document.getElementById('wip-limits-section');
   const wipLimits = currentProject.wip_limits || {};
@@ -1756,6 +1766,27 @@ document.getElementById('save-bug-perms-btn').addEventListener('click', async ()
     });
     currentProject.bug_report_settings = updated.bug_report_settings;
     showToast('Bug report permissions saved', 'success');
+  } catch (err) { showToast(err.message); }
+});
+
+document.getElementById('export-btn').addEventListener('click', async () => {
+  if (!currentProject) return;
+  const format = document.getElementById('export-format').value;
+  const column = document.getElementById('export-column').value;
+  let url = `/api/projects/${currentProject.id}/export?format=${format}`;
+  if (column) url += `&column=${encodeURIComponent(column)}`;
+
+  try {
+    const token = localStorage.getItem('duckllo_token');
+    const resp = await fetch(url, { headers: { 'Authorization': `Bearer ${token}` } });
+    if (!resp.ok) throw new Error((await resp.json()).error);
+    const blob = await resp.blob();
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `${currentProject.name.replace(/[^a-zA-Z0-9]/g, '_')}_export.${format}`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+    showToast('Export downloaded', 'success');
   } catch (err) { showToast(err.message); }
 });
 

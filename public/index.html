@@ -458,6 +458,19 @@
         <h3>Bug Reports</h3>
         <div id="bug-reports-list" class="bug-reports-list"></div>
 
+        <h3>Export Board</h3>
+        <p class="help-text">Download all cards as CSV or JSON for reporting and backups.</p>
+        <div class="export-row">
+          <select id="export-format" class="filter-select" style="width:auto">
+            <option value="json">JSON</option>
+            <option value="csv">CSV</option>
+          </select>
+          <select id="export-column" class="filter-select" style="width:auto">
+            <option value="">All columns</option>
+          </select>
+          <button id="export-btn" class="btn btn-sm btn-primary">Download Export</button>
+        </div>
+
         <h3>Project Statistics</h3>
         <div id="project-stats" class="project-stats"></div>
 

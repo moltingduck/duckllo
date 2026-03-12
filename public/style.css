@@ -1521,6 +1521,7 @@ kbd {
   width: 70px; padding: 4px 8px; background: var(--bg); border: 1px solid var(--border);
   color: var(--text); border-radius: var(--radius); font: inherit; text-align: center;
 }
+.export-row { display: flex; gap: 8px; align-items: center; margin-top: 8px; }
 
 /* Card Dependencies / Links */
 .card-links-list { display: flex; flex-direction: column; gap: 4px; margin-bottom: 8px; }
