@@ -151,6 +151,7 @@ async function initDB() {
       ALTER TABLE cards ADD COLUMN IF NOT EXISTS token_usage INTEGER DEFAULT 0;
       ALTER TABLE cards ADD COLUMN IF NOT EXISTS archived_at TIMESTAMP;
       ALTER TABLE cards ADD COLUMN IF NOT EXISTS due_date DATE;
+      ALTER TABLE projects ADD COLUMN IF NOT EXISTS wip_limits JSONB DEFAULT '{}';
     END $$;
   `);
 
@@ -720,7 +721,7 @@ app.patch('/api/projects/:projectId/settings', authenticate, requireProjectAcces
   try {
     if (req.memberRole !== 'owner' && req.memberRole !== 'product_manager') return res.status(403).json({ error: 'Only owners and product managers can change project settings' });
 
-    const { auto_approve, bug_report_settings } = req.body;
+    const { auto_approve, bug_report_settings, wip_limits } = req.body;
     if (auto_approve !== undefined) {
       await pool.query('UPDATE projects SET auto_approve = $1 WHERE id = $2', [!!auto_approve, req.params.projectId]);
     }
@@ -731,6 +732,18 @@ app.patch('/api/projects/:projectId/settings', authenticate, requireProjectAcces
         view_permission: validPerms.includes(bug_report_settings.view_permission) ? bug_report_settings.view_permission : 'member',
       };
       await pool.query('UPDATE projects SET bug_report_settings = $1 WHERE id = $2', [JSON.stringify(s), req.params.projectId]);
+    }
+    if (wip_limits !== undefined) {
+      // Validate: object with column names as keys and positive integers as values
+      const cleaned = {};
+      if (typeof wip_limits === 'object' && wip_limits !== null) {
+        for (const [col, limit] of Object.entries(wip_limits)) {
+          const n = parseInt(limit);
+          if (n > 0) cleaned[col] = n;
+          // Omit zero/negative/invalid = no limit for that column
+        }
+      }
+      await pool.query('UPDATE projects SET wip_limits = $1 WHERE id = $2', [JSON.stringify(cleaned), req.params.projectId]);
     }
 
     const { rows } = await pool.query('SELECT * FROM projects WHERE id = $1', [req.params.projectId]);
@@ -1075,7 +1088,19 @@ app.post('/api/projects/:projectId/cards/:cardId/move', authenticate, requirePro
 
     const { rows } = await pool.query('SELECT * FROM cards WHERE id = $1', [req.params.cardId]);
     broadcastToProject(req.params.projectId, 'card_moved', { card: rows[0], user: req.user.username });
-    res.json(rows[0]);
+
+    // WIP limit advisory warning
+    const wipLimits = req.project.wip_limits || {};
+    const colLimit = wipLimits[column_name];
+    const result = { ...rows[0] };
+    if (colLimit) {
+      const { rows: countRows } = await pool.query('SELECT COUNT(*) FROM cards WHERE project_id = $1 AND column_name = $2 AND archived_at IS NULL', [req.params.projectId, column_name]);
+      const count = parseInt(countRows[0].count);
+      if (count > colLimit) {
+        result.wip_warning = `Column "${column_name}" is over its WIP limit (${count}/${colLimit})`;
+      }
+    }
+    res.json(result);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 

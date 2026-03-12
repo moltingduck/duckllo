@@ -1506,6 +1506,22 @@ kbd {
 .auth-notice { padding: 16px; background: #3a3a1a; border-radius: var(--radius); color: #f0a03c; text-align: center; }
 .auth-notice a { color: var(--primary); }
 
+/* WIP Limits */
+.wip-badge {
+  font-size: 0.78rem; padding: 2px 8px; border-radius: 10px;
+  background: var(--bg-hover); color: var(--text-secondary); font-weight: 600;
+}
+.column-wip-at .wip-badge { background: #f0a03c33; color: var(--warning); }
+.column-wip-over .wip-badge { background: #ff5c5c33; color: var(--danger); }
+.column-wip-at .column-header { border-bottom: 2px solid var(--warning); }
+.column-wip-over .column-header { border-bottom: 2px solid var(--danger); }
+.wip-limit-row { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; }
+.wip-limit-label { flex: 1; font-size: 0.88rem; color: var(--text); }
+.wip-limit-input {
+  width: 70px; padding: 4px 8px; background: var(--bg); border: 1px solid var(--border);
+  color: var(--text); border-radius: var(--radius); font: inherit; text-align: center;
+}
+
 /* Card Dependencies / Links */
 .card-links-list { display: flex; flex-direction: column; gap: 4px; margin-bottom: 8px; }
 .card-link-chip {

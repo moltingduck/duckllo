@@ -293,14 +293,25 @@ function renderBoard() {
 
   const columns = currentProject.columns_config || ['Backlog', 'Todo', 'In Progress', 'Review', 'Done'];
 
+  const wipLimits = currentProject.wip_limits || {};
+
   columns.forEach(col => {
     const colCards = cards.filter(c => c.column_name === col).sort((a, b) => a.position - b.position);
     const colEl = document.createElement('div');
-    colEl.className = 'column';
+    const wipLimit = wipLimits[col];
+    let wipClass = '';
+    let wipBadge = '';
+    if (wipLimit) {
+      const count = colCards.length;
+      wipBadge = `<span class="wip-badge" title="WIP limit: ${wipLimit}">${count}/${wipLimit}</span>`;
+      if (count > wipLimit) wipClass = ' column-wip-over';
+      else if (count === wipLimit) wipClass = ' column-wip-at';
+    }
+    colEl.className = 'column' + wipClass;
     colEl.innerHTML = `
       <div class="column-header">
         <span class="column-title">${col}</span>
-        <span class="column-count">${colCards.length}</span>
+        ${wipBadge || `<span class="column-count">${colCards.length}</span>`}
       </div>
       <div class="column-cards" data-column="${col}"></div>
       <button class="add-card-btn" data-column="${col}">+ Add card</button>
@@ -1102,6 +1113,21 @@ document.getElementById('settings-btn').addEventListener('click', async () => {
   document.getElementById('new-key-display').style.display = 'none';
   await loadBugSettings();
 
+  // WIP Limits UI
+  const wipSection = document.getElementById('wip-limits-section');
+  const wipLimits = currentProject.wip_limits || {};
+  const columns = currentProject.columns_config || [];
+  wipSection.innerHTML = '';
+  columns.forEach(col => {
+    const row = document.createElement('div');
+    row.className = 'wip-limit-row';
+    row.innerHTML = `
+      <span class="wip-limit-label">${escHtml(col)}</span>
+      <input type="number" class="wip-limit-input" data-column="${escHtml(col)}" min="0" max="99" placeholder="No limit" value="${wipLimits[col] || ''}">
+    `;
+    wipSection.appendChild(row);
+  });
+
   // Show danger zone only for product_manager, owner, or system admin
   const canDelete = currentMemberRole === 'owner' || currentMemberRole === 'product_manager' || currentUser?.system_role === 'admin';
   document.getElementById('danger-zone').style.display = canDelete ? 'block' : 'none';
@@ -1733,6 +1759,24 @@ document.getElementById('save-bug-perms-btn').addEventListener('click', async ()
   } catch (err) { showToast(err.message); }
 });
 
+document.getElementById('save-wip-limits-btn').addEventListener('click', async () => {
+  try {
+    const limits = {};
+    document.querySelectorAll('.wip-limit-input').forEach(input => {
+      const col = input.dataset.column;
+      const val = parseInt(input.value);
+      if (val > 0) limits[col] = val;
+    });
+    const updated = await api(`/projects/${currentProject.id}/settings`, {
+      method: 'PATCH',
+      body: { wip_limits: limits }
+    });
+    currentProject.wip_limits = updated.wip_limits;
+    await loadBoard();
+    showToast('WIP limits saved', 'success');
+  } catch (err) { showToast(err.message); }
+});
+
 let currentBug = null;
 
 async function openBugDetail(bugId) {
@@ -1918,6 +1962,12 @@ document.addEventListener('keydown', (e) => {
   if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') {
     // Escape still works in inputs
     if (e.key === 'Escape') { e.target.blur(); return; }
+    return;
+  }
+
+  // Never override browser shortcuts (Ctrl+R, Ctrl+T, Ctrl+W, etc.)
+  // Only allow Ctrl+Enter (save card) as a custom combo
+  if ((e.ctrlKey || e.metaKey || e.altKey) && !(e.key === 'Enter' && (e.ctrlKey || e.metaKey))) {
     return;
   }
 
