@@ -152,6 +152,7 @@ async function initDB() {
       ALTER TABLE cards ADD COLUMN IF NOT EXISTS archived_at TIMESTAMP;
       ALTER TABLE cards ADD COLUMN IF NOT EXISTS due_date DATE;
       ALTER TABLE projects ADD COLUMN IF NOT EXISTS wip_limits JSONB DEFAULT '{}';
+      ALTER TABLE projects ADD COLUMN IF NOT EXISTS auto_archive_days INTEGER DEFAULT 0;
     END $$;
   `);
 
@@ -721,9 +722,16 @@ app.patch('/api/projects/:projectId/settings', authenticate, requireProjectAcces
   try {
     if (req.memberRole !== 'owner' && req.memberRole !== 'product_manager') return res.status(403).json({ error: 'Only owners and product managers can change project settings' });
 
-    const { auto_approve, bug_report_settings, wip_limits } = req.body;
+    const { auto_approve, bug_report_settings, wip_limits, auto_archive_days } = req.body;
     if (auto_approve !== undefined) {
       await pool.query('UPDATE projects SET auto_approve = $1 WHERE id = $2', [!!auto_approve, req.params.projectId]);
+    }
+    if (auto_archive_days !== undefined) {
+      const days = parseInt(auto_archive_days);
+      // 0 = disabled, positive integer = auto-archive after N days in Done
+      if (!isNaN(days) && days >= 0 && days <= 365) {
+        await pool.query('UPDATE projects SET auto_archive_days = $1 WHERE id = $2', [days, req.params.projectId]);
+      }
     }
     if (bug_report_settings !== undefined) {
       const validPerms = ['anonymous', 'logged_in', 'member'];
@@ -2101,6 +2109,37 @@ async function start() {
   }
 
   await initDB();
+
+  // Auto-archive: archive Done cards older than N days per project setting
+  async function autoArchiveDoneCards() {
+    try {
+      const { rows: projects } = await pool.query(
+        'SELECT id, name, auto_archive_days FROM projects WHERE auto_archive_days > 0'
+      );
+      for (const project of projects) {
+        const { rows: cards } = await pool.query(
+          `UPDATE cards SET archived_at = NOW(), updated_at = NOW()
+           WHERE project_id = $1 AND column_name = 'Done' AND archived_at IS NULL
+             AND updated_at < NOW() - ($2 || ' days')::INTERVAL
+           RETURNING id, title`,
+          [project.id, project.auto_archive_days]
+        );
+        if (cards.length > 0) {
+          console.log(`[auto-archive] Archived ${cards.length} card(s) in project "${project.name}" (>${project.auto_archive_days} days in Done)`);
+          for (const card of cards) {
+            broadcastToProject(project.id, 'card_archived', { card, user: 'system' });
+          }
+        }
+      }
+    } catch (err) {
+      console.error('[auto-archive] Error:', err.message);
+    }
+  }
+
+  // Run on startup and every hour
+  await autoArchiveDoneCards();
+  setInterval(autoArchiveDoneCards, 60 * 60 * 1000);
+
   app.listen(PORT, () => {
     console.log(`Duckllo running on http://localhost:${PORT}`);
   });

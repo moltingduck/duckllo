@@ -1113,6 +1113,9 @@ document.getElementById('settings-btn').addEventListener('click', async () => {
   document.getElementById('new-key-display').style.display = 'none';
   await loadBugSettings();
 
+  // Auto-archive days
+  document.getElementById('auto-archive-days').value = projectData.auto_archive_days || 0;
+
   // Export column filter
   const exportColSelect = document.getElementById('export-column');
   exportColSelect.innerHTML = '<option value="">All columns</option>';
@@ -1805,6 +1808,18 @@ document.getElementById('save-wip-limits-btn').addEventListener('click', async (
     currentProject.wip_limits = updated.wip_limits;
     await loadBoard();
     showToast('WIP limits saved', 'success');
+  } catch (err) { showToast(err.message); }
+});
+
+document.getElementById('save-auto-archive-btn').addEventListener('click', async () => {
+  try {
+    const days = parseInt(document.getElementById('auto-archive-days').value) || 0;
+    const updated = await api(`/projects/${currentProject.id}/settings`, {
+      method: 'PATCH',
+      body: { auto_archive_days: days }
+    });
+    currentProject.auto_archive_days = updated.auto_archive_days;
+    showToast(days > 0 ? `Auto-archive set to ${days} days` : 'Auto-archive disabled', 'success');
   } catch (err) { showToast(err.message); }
 });
 

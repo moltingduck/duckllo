@@ -427,6 +427,15 @@
           <code id="new-key-value"></code>
         </div>
 
+        <h3>Auto-Archive</h3>
+        <p class="help-text">Automatically archive cards that have been in Done for more than N days. Set to 0 to disable.</p>
+        <div class="auto-archive-row">
+          <label>Archive after</label>
+          <input type="number" id="auto-archive-days" class="wip-limit-input" min="0" max="365" value="0" style="width:60px">
+          <span>days in Done</span>
+          <button id="save-auto-archive-btn" class="btn btn-sm btn-primary" style="margin-left:8px">Save</button>
+        </div>
+
         <h3>WIP Limits</h3>
         <p class="help-text">Set maximum cards per column. Exceeding the limit shows a visual warning (not a hard block).</p>
         <div id="wip-limits-section"></div>
