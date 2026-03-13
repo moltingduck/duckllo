@@ -291,7 +291,13 @@ function renderBoard() {
     return;
   }
 
-  const columns = currentProject.columns_config || ['Backlog', 'Todo', 'In Progress', 'Review', 'Done'];
+  let columns = currentProject.columns_config || ['Backlog', 'Todo', 'In Progress', 'Review', 'Done'];
+
+  // Reviewer role: only show Review and Done columns
+  const isReviewer = currentMemberRole === 'reviewer';
+  if (isReviewer) {
+    columns = columns.filter(c => c === 'Review' || c === 'Done');
+  }
 
   const wipLimits = currentProject.wip_limits || {};
 
@@ -314,12 +320,15 @@ function renderBoard() {
         ${wipBadge || `<span class="column-count">${colCards.length}</span>`}
       </div>
       <div class="column-cards" data-column="${col}"></div>
-      <button class="add-card-btn" data-column="${col}">+ Add card</button>
+      ${isReviewer ? '' : `<button class="add-card-btn" data-column="${col}">+ Add card</button>`}
     `;
 
     const cardsContainer = colEl.querySelector('.column-cards');
 
-    // Drag & drop
+    // Drag & drop (disabled for reviewers)
+    if (isReviewer) {
+      // No drag & drop for reviewers
+    } else {
     cardsContainer.addEventListener('dragover', (e) => {
       e.preventDefault();
       cardsContainer.classList.add('drag-over');
@@ -350,16 +359,20 @@ function renderBoard() {
         await loadBoard();
       } catch (err) { showToast(err.message); }
     });
+    } // end else (not reviewer)
 
     colCards.forEach(card => {
       const cardEl = createCardElement(card);
       cardsContainer.appendChild(cardEl);
     });
 
-    colEl.querySelector('.add-card-btn').addEventListener('click', () => {
-      document.getElementById('new-card-column').value = col;
-      openModal('new-card-modal');
-    });
+    const addBtn = colEl.querySelector('.add-card-btn');
+    if (addBtn) {
+      addBtn.addEventListener('click', () => {
+        document.getElementById('new-card-column').value = col;
+        openModal('new-card-modal');
+      });
+    }
 
     board.appendChild(colEl);
   });
@@ -368,7 +381,7 @@ function renderBoard() {
 function createCardElement(card) {
   const el = document.createElement('div');
   el.className = 'card';
-  el.draggable = true;
+  el.draggable = currentMemberRole !== 'reviewer';
   el.dataset.id = card.id;
 
   el.addEventListener('dragstart', (e) => {
@@ -1181,8 +1194,9 @@ document.getElementById('settings-btn').addEventListener('click', async () => {
 document.getElementById('add-member-btn').addEventListener('click', async () => {
   const username = document.getElementById('add-member-username').value.trim();
   if (!username) return;
+  const role = document.getElementById('add-member-role').value;
   try {
-    await api(`/projects/${currentProject.id}/members`, { method: 'POST', body: { username } });
+    await api(`/projects/${currentProject.id}/members`, { method: 'POST', body: { username, role } });
     document.getElementById('add-member-username').value = '';
     document.getElementById('member-suggestions').innerHTML = '';
     document.getElementById('settings-btn').click();

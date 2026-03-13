@@ -702,7 +702,7 @@ app.post('/api/projects/:projectId/members', authenticate, requireProjectAccess,
     if (req.memberRole !== 'owner' && req.memberRole !== 'product_manager') return res.status(403).json({ error: 'Only owners and product managers can add members' });
 
     const { username, role } = req.body;
-    const validRoles = ['member', 'owner', 'product_manager'];
+    const validRoles = ['member', 'owner', 'product_manager', 'reviewer'];
     if (role && !validRoles.includes(role)) return res.status(400).json({ error: `Invalid role. Valid roles: ${validRoles.join(', ')}` });
 
     const { rows: users } = await pool.query('SELECT id FROM users WHERE username = $1', [username]);
@@ -812,6 +812,11 @@ app.get('/api/projects/:projectId/cards', authenticate, requireProjectAccess, as
     const params = [req.params.projectId];
     let idx = 2;
 
+    // Reviewer role: restrict to Review and Done columns only
+    if (req.memberRole === 'reviewer') {
+      where += ` AND c.column_name IN ('Review', 'Done')`;
+    }
+
     if (req.query.column) {
       where += ` AND c.column_name = $${idx}`;
       params.push(req.query.column);
@@ -901,6 +906,7 @@ app.get('/api/projects/:projectId/cards', authenticate, requireProjectAccess, as
 
 app.post('/api/projects/:projectId/cards', authenticate, requireProjectAccess, async (req, res) => {
   try {
+    if (req.memberRole === 'reviewer') return res.status(403).json({ error: 'Reviewers cannot create cards' });
     const { title, description, card_type, column_name, priority, assignee_id, labels, due_date } = req.body;
     if (!title) return res.status(400).json({ error: 'Title required' });
 
@@ -956,6 +962,7 @@ app.post('/api/projects/:projectId/cards', authenticate, requireProjectAccess, a
 
 app.patch('/api/projects/:projectId/cards/:cardId', authenticate, requireProjectAccess, async (req, res) => {
   try {
+    if (req.memberRole === 'reviewer') return res.status(403).json({ error: 'Reviewers cannot edit cards' });
     const { rows: cards } = await pool.query('SELECT * FROM cards WHERE id = $1 AND project_id = $2', [req.params.cardId, req.params.projectId]);
     if (!cards[0]) return res.status(404).json({ error: 'Card not found' });
 
@@ -999,6 +1006,7 @@ app.patch('/api/projects/:projectId/cards/:cardId', authenticate, requireProject
 });
 
 app.delete('/api/projects/:projectId/cards/:cardId', authenticate, requireProjectAccess, async (req, res) => {
+  if (req.memberRole === 'reviewer') return res.status(403).json({ error: 'Reviewers cannot delete cards' });
   await pool.query('DELETE FROM cards WHERE id = $1 AND project_id = $2', [req.params.cardId, req.params.projectId]);
   broadcastToProject(req.params.projectId, 'card_deleted', { cardId: req.params.cardId, user: req.user.username });
   res.json({ ok: true });
@@ -1058,6 +1066,7 @@ app.get('/api/projects/:projectId/cards/archived', authenticate, requireProjectA
 
 app.post('/api/projects/:projectId/cards/:cardId/move', authenticate, requireProjectAccess, async (req, res) => {
   try {
+    if (req.memberRole === 'reviewer') return res.status(403).json({ error: 'Reviewers cannot move cards' });
     const { column_name, position } = req.body;
     const { rows: cards } = await pool.query('SELECT * FROM cards WHERE id = $1 AND project_id = $2', [req.params.cardId, req.params.projectId]);
     if (!cards[0]) return res.status(404).json({ error: 'Card not found' });
@@ -1116,6 +1125,7 @@ app.post('/api/projects/:projectId/cards/:cardId/move', authenticate, requirePro
 
 app.post('/api/projects/:projectId/cards/:cardId/pickup', authenticate, requireProjectAccess, async (req, res) => {
   try {
+    if (req.memberRole === 'reviewer') return res.status(403).json({ error: 'Reviewers cannot pick up cards' });
     const { rows: cards } = await pool.query('SELECT * FROM cards WHERE id = $1 AND project_id = $2', [req.params.cardId, req.params.projectId]);
     if (!cards[0]) return res.status(404).json({ error: 'Card not found' });
 
@@ -1167,12 +1177,17 @@ app.post('/api/projects/:projectId/cards/:cardId/pickup', authenticate, requireP
 
 app.post('/api/projects/:projectId/cards/:cardId/approve', authenticate, requireProjectAccess, async (req, res) => {
   try {
-    if (req.memberRole !== 'owner' && req.memberRole !== 'product_manager') {
-      return res.status(403).json({ error: 'Only product owners can approve cards' });
+    if (req.memberRole !== 'owner' && req.memberRole !== 'product_manager' && req.memberRole !== 'reviewer') {
+      return res.status(403).json({ error: 'Only product owners and reviewers can approve cards' });
     }
 
     const { rows: cards } = await pool.query('SELECT * FROM cards WHERE id = $1 AND project_id = $2', [req.params.cardId, req.params.projectId]);
     if (!cards[0]) return res.status(404).json({ error: 'Card not found' });
+
+    // Reviewers can only approve/reject cards in Review column
+    if (req.memberRole === 'reviewer' && cards[0].column_name !== 'Review') {
+      return res.status(403).json({ error: 'Reviewers can only approve or reject cards in the Review column' });
+    }
 
     const { action, comment } = req.body; // action: 'approve', 'reject', or 'revise'
     if (!action || !['approve', 'reject', 'revise'].includes(action)) {
@@ -1268,6 +1283,13 @@ app.get('/api/projects/:projectId/cards/:cardId/comments', authenticate, require
 
 app.post('/api/projects/:projectId/cards/:cardId/comments', authenticate, requireProjectAccess, async (req, res) => {
   try {
+    // Reviewers can only comment on cards in Review
+    if (req.memberRole === 'reviewer') {
+      const { rows: cardCheck } = await pool.query('SELECT column_name FROM cards WHERE id = $1 AND project_id = $2', [req.params.cardId, req.params.projectId]);
+      if (!cardCheck[0] || cardCheck[0].column_name !== 'Review') {
+        return res.status(403).json({ error: 'Reviewers can only comment on cards in the Review column' });
+      }
+    }
     const { content, comment_type } = req.body;
     if (!content) return res.status(400).json({ error: 'Content required' });
 
