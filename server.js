@@ -1221,11 +1221,20 @@ app.post('/api/projects/:projectId/cards/:cardId/approve', authenticate, require
         ['Todo', newPos, req.params.cardId]);
     }
 
+    // Auto-move approved cards from Review to Done
+    if (action === 'approve' && cards[0].column_name === 'Review') {
+      const { rows: maxRows } = await pool.query('SELECT MAX(position) as maxp FROM cards WHERE project_id = $1 AND column_name = $2', [req.params.projectId, 'Done']);
+      const newPos = (maxRows[0]?.maxp ?? -1) + 1;
+      await pool.query('UPDATE cards SET column_name = $1, position = $2, completed_at = COALESCE(completed_at, NOW()), updated_at = NOW() WHERE id = $3',
+        ['Done', newPos, req.params.cardId]);
+    }
+
     // Add auto-comment
     const commentId = uuidv4();
     let commentText;
     if (action === 'approve') {
-      commentText = `Card approved and moved to Todo by ${req.user.username}`;
+      const dest = cards[0].column_name === 'Review' ? 'Done' : 'Todo';
+      commentText = `Card approved and moved to ${dest} by ${req.user.username}`;
     } else if (action === 'revise') {
       commentText = comment
         ? `Revision requested by ${req.user.username}: ${comment}`
