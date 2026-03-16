@@ -224,8 +224,9 @@ GET /api/projects/<pid>/cards
 | `testing_status` | Filter by test status: `untested`, `passing`, `failing`, `partial` | `?testing_status=passing` |
 | `assignee` | Filter by assignee user ID | `?assignee=<uid>` |
 | `unassigned` | Only unassigned cards | `?unassigned=true` |
-| `limit` | Enable pagination, max cards per page (1-100) | `?limit=10` |
-| `page` | Page number (default 1, requires `limit`) | `?limit=10&page=2` |
+| `limit` | Enable pagination, max 5 cards per page | `?limit=5` |
+| `page` | Page number (default 1, requires `limit`) | `?limit=5&page=2` |
+| `sort` | Sort order: `priority` (critical→low) or default (position) | `?sort=priority` |
 
 **Without `limit`** — returns a flat JSON array (backwards compatible):
 ```json
@@ -266,11 +267,14 @@ Each card has:
 # Get only Todo cards (small response)
 curl "$URL/api/projects/$PID/cards?column=Todo" -H "Authorization: Bearer $KEY"
 
-# Get first 5 bugs
-curl "$URL/api/projects/$PID/cards?card_type=bug&limit=5" -H "Authorization: Bearer $KEY"
+# Get first 5 bugs sorted by priority
+curl "$URL/api/projects/$PID/cards?card_type=bug&limit=5&sort=priority" -H "Authorization: Bearer $KEY"
 
-# Get UI cards in Review, page 1
-curl "$URL/api/projects/$PID/cards?column=Review&label=ui&limit=10" -H "Authorization: Bearer $KEY"
+# Get UI cards in Review, page 1 (max 5 per page)
+curl "$URL/api/projects/$PID/cards?column=Review&label=ui&limit=5" -H "Authorization: Bearer $KEY"
+
+# Page 2 of all cards sorted by priority
+curl "$URL/api/projects/$PID/cards?limit=5&page=2&sort=priority" -H "Authorization: Bearer $KEY"
 ```
 
 ### Create a Card

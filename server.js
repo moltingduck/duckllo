@@ -862,10 +862,16 @@ app.get('/api/projects/:projectId/cards', authenticate, requireProjectAccess, as
       idx++;
     }
 
+    // Sort order: default is position, ?sort=priority orders by priority (critical > high > medium > low)
+    const sort = req.query.sort;
+    const orderBy = (sort === 'priority' || sort === 'severity')
+      ? `CASE c.priority WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 WHEN 'low' THEN 3 ELSE 4 END ASC, c.position ASC`
+      : 'c.position ASC';
+
     // Pagination (only when ?limit= is explicitly provided)
     const page = Math.max(1, parseInt(req.query.page) || 1);
     const hasLimit = req.query.limit !== undefined;
-    const limit = hasLimit ? Math.min(100, Math.max(1, parseInt(req.query.limit) || 20)) : 0;
+    const limit = hasLimit ? Math.min(5, Math.max(1, parseInt(req.query.limit) || 5)) : 0;
 
     if (hasLimit) {
       // Count total matching cards
@@ -885,7 +891,7 @@ app.get('/api/projects/:projectId/cards', authenticate, requireProjectAccess, as
         LEFT JOIN users u ON c.assignee_id = u.id
         LEFT JOIN users cr ON c.created_by = cr.id
         WHERE ${where}
-        ORDER BY c.position ASC
+        ORDER BY ${orderBy}
         LIMIT $${idx} OFFSET $${idx + 1}
       `, params);
 
@@ -901,7 +907,7 @@ app.get('/api/projects/:projectId/cards', authenticate, requireProjectAccess, as
         LEFT JOIN users u ON c.assignee_id = u.id
         LEFT JOIN users cr ON c.created_by = cr.id
         WHERE ${where}
-        ORDER BY c.position ASC
+        ORDER BY ${orderBy}
       `, params);
       res.json(rows);
     }
