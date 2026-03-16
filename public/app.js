@@ -277,9 +277,11 @@ async function loadBoard() {
   } catch { currentMemberRole = null; }
   cards = await api(`/projects/${currentProject.id}/cards`);
   document.getElementById('auto-approve-toggle').checked = !!currentProject.auto_approve;
-  // Only show toggle for owners
-  document.getElementById('auto-approve-container').style.display =
-    currentMemberRole === 'owner' || currentMemberRole === 'product_manager' ? 'flex' : 'none';
+  document.getElementById('auto-review-toggle').checked = !!currentProject.auto_review;
+  // Only show toggles for owners/product managers
+  const isManager = currentMemberRole === 'owner' || currentMemberRole === 'product_manager';
+  document.getElementById('auto-approve-container').style.display = isManager ? 'flex' : 'none';
+  document.getElementById('auto-review-container').style.display = isManager ? 'flex' : 'none';
   renderBoard();
   connectSSE();
 }
@@ -1092,6 +1094,20 @@ document.getElementById('auto-approve-toggle').addEventListener('change', async 
     });
     currentProject.auto_approve = updated.auto_approve;
     showToast(e.target.checked ? 'Auto-approve enabled' : 'Auto-approve disabled', 'success');
+  } catch (err) {
+    e.target.checked = !e.target.checked;
+    showToast(err.message);
+  }
+});
+
+document.getElementById('auto-review-toggle').addEventListener('change', async (e) => {
+  try {
+    const updated = await api(`/projects/${currentProject.id}/settings`, {
+      method: 'PATCH',
+      body: { auto_review: e.target.checked }
+    });
+    currentProject.auto_review = updated.auto_review;
+    showToast(e.target.checked ? 'Auto-review enabled: agents can review cards' : 'Auto-review disabled', 'success');
   } catch (err) {
     e.target.checked = !e.target.checked;
     showToast(err.message);

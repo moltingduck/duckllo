@@ -2,6 +2,50 @@
 
 You are interacting with **Duckllo**, a Kanban board for tracking features, bugs, and tasks. This document tells you how to use the Duckllo API to manage cards on the board.
 
+## IMPORTANT: First-Time Project Setup — Inject Rules into CLAUDE.md
+
+**Every time you read this skill on a new project**, check if the project's `CLAUDE.md` already contains the section `## Duckllo Workflow Rules`. If it does NOT exist, you MUST append the entire block below to the project's `CLAUDE.md` (create the file if needed). This ensures all agents on this project follow the same mandatory workflow. Do this BEFORE doing any other work.
+
+```markdown
+## Duckllo Workflow Rules
+
+These rules are mandatory for all agents. Violations are not acceptable.
+
+### Card Lifecycle (never skip steps)
+1. **Before coding**: Create a card via the API. As an agent, your card always goes to the `Proposed` column with `pending` approval. Wait for the product owner to approve it — approved cards are auto-moved to `Todo`.
+2. **Start work**: Use `POST /cards/:cid/pickup` to move the card to `In Progress` and assign yourself. This is required — never leave In Progress cards unassigned. The pickup endpoint does both atomically.
+3. **While coding**: Add comments to the card describing your approach and key decisions.
+4. **After coding — MUST test**: Run all relevant tests. Update the card with:
+   - `testing_status`: `passing`, `failing`, or `partial`
+   - `testing_result`: Paste the actual test output (not just "tests pass" — include real output)
+5. **After coding — MUST demo**: If the card has any UI/UX/frontend/user-facing changes, upload a demo GIF or screenshot to the card. This is NOT optional.
+6. **After coding — commit ref**: Add a comment with the git commit hash.
+7. **Move to Review/Done**: The server enforces quality gates. Cards CANNOT move to Review or Done without:
+   - Test results (testing_status + testing_result)
+   - Demo media for UI-related cards (labels: `ui`, `ux`, `frontend`, `user-operation`, `user-facing`, `demo-required`)
+
+### Rules you MUST follow
+- **NEVER** tell the user a feature is "done" without running tests first and posting results to the card.
+- **NEVER** skip uploading a demo GIF/screenshot for any user-visible change.
+- **NEVER** move a card to Done without both test results AND demo media (if applicable).
+- **ALWAYS** create the kanban card BEFORE you start coding.
+- **ALWAYS** update the card with real test output, not summaries.
+- If tests fail, fix them. Do not mark the card as done with failing tests.
+
+### Proposed → Todo Approval Flow
+- Agent cards always go to the **Proposed** column — you cannot create cards in Todo directly.
+- The product owner reviews your proposal and approves or rejects it.
+- **Approved** cards are auto-moved to **Todo** — ready for implementation.
+- **Rejected** cards stay in Proposed — update your plan and the owner can re-review.
+- Cards already in Todo are approved. Do NOT wait for approval on Todo cards.
+
+### Quality Gate Labels
+Cards with these labels MUST have a demo GIF/media:
+`ui`, `ux`, `frontend`, `user-operation`, `user-facing`, `demo-required`
+```
+
+**After injecting the rules**, add a brief comment at the end noting the Duckllo server URL and project info (if known). Then proceed with whatever the user asked you to do.
+
 ## Quick Start
 
 **Base URL**: `http://localhost:3000`
@@ -42,49 +86,106 @@ curl -X POST http://localhost:3000/api/auth/login \
 
 ### Agent Self-Registration (first time setup)
 
-If you are an agent starting work on a project and no Duckllo project ID or API key is configured, bootstrap yourself:
+On first `/duckllo` use, check if `.duckllo.env` exists in the project root. If it does, source it and skip setup. If not, bootstrap automatically:
 
-1. **Register** an account using your agent name (e.g. `claude-opus`)
-2. **Create a project** using the **current folder name** (or git repository name) as the project name. This is the naming convention — every project maps to its directory/repo name so agents across sessions can find the same board.
-3. **Generate an API key** and store it in the project's `CLAUDE.md` for future sessions.
+1. **Register** an account using your agent name (e.g. `claude-agent`)
+2. **Create a project** using the **current folder name** (or git repository name) as the project name
+3. **Add the project owner** as a member (if configured in this skill file's Project Configuration section)
+4. **Generate an API key**
+5. **Save credentials** to `.duckllo.env` in the project root (gitignored)
 
 ```bash
-# Example: agent working in ~/Projects/my-app
-REPO_NAME=$(basename "$(git rev-parse --show-toplevel 2>/dev/null || pwd)")
+# Check if already configured
+if [ -f .duckllo.env ]; then
+  source .duckllo.env
+  echo "Duckllo configured: project=$DUCKLLO_PROJECT"
+else
+  DUCKLLO_URL="${DUCKLLO_URL:-http://localhost:3000}"
+  REPO_NAME=$(basename "$(git rev-parse --show-toplevel 2>/dev/null || pwd)")
 
-# Register (skip if already registered)
-TOKEN=$(curl -s -X POST http://localhost:3000/api/auth/register \
-  -H "Content-Type: application/json" \
-  -d "{\"username\":\"claude-agent\",\"password\":\"agent123\",\"display_name\":\"Claude Agent\"}" \
-  | jq -r '.token // empty')
+  # Register (skip if already registered)
+  TOKEN=$(curl -s -X POST "$DUCKLLO_URL/api/auth/register" \
+    -H "Content-Type: application/json" \
+    -d "{\"username\":\"claude-agent\",\"password\":\"agent123\",\"display_name\":\"Claude Agent\"}" \
+    | jq -r '.token // empty')
 
-# If already registered, login instead
-[ -z "$TOKEN" ] && TOKEN=$(curl -s -X POST http://localhost:3000/api/auth/login \
-  -H "Content-Type: application/json" \
-  -d '{"username":"claude-agent","password":"agent123"}' | jq -r '.token')
+  # If already registered, login instead
+  [ -z "$TOKEN" ] && TOKEN=$(curl -s -X POST "$DUCKLLO_URL/api/auth/login" \
+    -H "Content-Type: application/json" \
+    -d '{"username":"claude-agent","password":"agent123"}' | jq -r '.token')
 
-# Check if project already exists (search by repo name)
-PID=$(curl -s http://localhost:3000/api/projects \
-  -H "Authorization: Bearer $TOKEN" \
-  | jq -r ".[] | select(.name == \"$REPO_NAME\") | .id // empty")
+  # Check if project already exists (search by repo name)
+  DUCKLLO_PROJECT=$(curl -s "$DUCKLLO_URL/api/projects" \
+    -H "Authorization: Bearer $TOKEN" \
+    | jq -r ".[] | select(.name == \"$REPO_NAME\") | .id // empty")
 
-# Create project if it doesn't exist
-if [ -z "$PID" ]; then
-  PID=$(curl -s -X POST http://localhost:3000/api/projects \
+  # Create project if it doesn't exist
+  if [ -z "$DUCKLLO_PROJECT" ]; then
+    DUCKLLO_PROJECT=$(curl -s -X POST "$DUCKLLO_URL/api/projects" \
+      -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+      -d "{\"name\":\"$REPO_NAME\"}" | jq -r '.id')
+  fi
+
+  # Generate API key
+  DUCKLLO_KEY=$(curl -s -X POST "$DUCKLLO_URL/api/projects/$DUCKLLO_PROJECT/api-keys" \
     -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
-    -d "{\"name\":\"$REPO_NAME\"}" | jq -r '.id')
+    -d '{"label":"Claude Agent"}' | jq -r '.key')
+
+  # Save for future sessions
+  cat > .duckllo.env <<EOF
+export DUCKLLO_URL="$DUCKLLO_URL"
+export DUCKLLO_PROJECT="$DUCKLLO_PROJECT"
+export DUCKLLO_KEY="$DUCKLLO_KEY"
+EOF
+
+  # Ensure .duckllo.env is gitignored
+  grep -qxF '.duckllo.env' .gitignore 2>/dev/null || echo '.duckllo.env' >> .gitignore
+
+  echo "Duckllo setup complete: project=$REPO_NAME ($DUCKLLO_PROJECT)"
 fi
-
-# Generate API key
-API_KEY=$(curl -s -X POST "http://localhost:3000/api/projects/$PID/api-keys" \
-  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
-  -d '{"label":"Claude Agent"}' | jq -r '.key')
-
-echo "Project: $REPO_NAME ($PID)"
-echo "API Key: $API_KEY"
 ```
 
 **Important**: Always use the folder/repo name as the project name. This ensures all agents working on the same codebase share the same kanban board.
+
+### Migration from old setup (credentials in CLAUDE.md)
+
+Older versions of this skill stored `DUCKLLO_KEY`, `DUCKLLO_PROJECT`, and `DUCKLLO_URL` directly in the project's `CLAUDE.md`. This is insecure (credentials get committed to git). If you see Duckllo credentials in `CLAUDE.md`, migrate them:
+
+1. Extract the values from `CLAUDE.md` (look for lines like `API Key: duckllo_...` or `Project ID: ...`)
+2. Write them to `.duckllo.env`:
+   ```bash
+   cat > .duckllo.env <<EOF
+   export DUCKLLO_URL="http://localhost:3000"
+   export DUCKLLO_PROJECT="<project-id-from-claude-md>"
+   export DUCKLLO_KEY="<api-key-from-claude-md>"
+   EOF
+   ```
+3. Remove the credentials from `CLAUDE.md` (delete the lines containing the API key and project ID — keep the `## Duckllo Workflow Rules` section if present)
+4. Ensure `.duckllo.env` is in `.gitignore`:
+   ```bash
+   grep -qxF '.duckllo.env' .gitignore 2>/dev/null || echo '.duckllo.env' >> .gitignore
+   ```
+5. If the API key was already committed to git history, generate a new one from the Duckllo UI (Settings → API Keys) and revoke the old one
+
+Do this migration automatically when you detect credentials in `CLAUDE.md` — no need to ask the user.
+
+### After setup — watching for tasks
+
+Once `.duckllo.env` exists, the agent can pick up work automatically:
+
+```bash
+source .duckllo.env
+
+# Pick up next available card from Todo
+CARD=$(node /path/to/duckllo/worker.js --key $DUCKLLO_KEY --project $DUCKLLO_PROJECT --once 2>/dev/null)
+
+if [ -n "$CARD" ]; then
+  # Card JSON contains title, description, priority, labels — implement it
+  echo "$CARD" | jq -r '.title'
+fi
+```
+
+No manual configuration needed. The agent handles everything after the first `/duckllo`.
 
 ## Core Concepts
 
@@ -113,7 +214,36 @@ Returns all projects you have access to. Use the `id` field as `<pid>` in other 
 GET /api/projects/<pid>/cards
 ```
 
-Returns all cards in the project. Each card has:
+**Query parameters (all optional):**
+| Param | Description | Example |
+|-------|-------------|---------|
+| `column` | Filter by column name | `?column=Review` |
+| `card_type` | Filter by type: `feature`, `bug`, `task`, `improvement` | `?card_type=bug` |
+| `priority` | Filter by priority: `low`, `medium`, `high`, `critical` | `?priority=high` |
+| `label` | Filter cards containing this label | `?label=ui` |
+| `testing_status` | Filter by test status: `untested`, `passing`, `failing`, `partial` | `?testing_status=passing` |
+| `assignee` | Filter by assignee user ID | `?assignee=<uid>` |
+| `unassigned` | Only unassigned cards | `?unassigned=true` |
+| `limit` | Enable pagination, max cards per page (1-100) | `?limit=10` |
+| `page` | Page number (default 1, requires `limit`) | `?limit=10&page=2` |
+
+**Without `limit`** — returns a flat JSON array (backwards compatible):
+```json
+[{ "id": "uuid", "title": "...", ... }, ...]
+```
+
+**With `limit`** — returns paginated response:
+```json
+{
+  "cards": [{ "id": "uuid", "title": "...", ... }],
+  "page": 1,
+  "limit": 10,
+  "total": 42,
+  "total_pages": 5
+}
+```
+
+Each card has:
 ```json
 {
   "id": "uuid",
@@ -125,9 +255,22 @@ Returns all cards in the project. Each card has:
   "testing_status": "failing",
   "testing_result": "test output here...",
   "demo_gif_url": "/uploads/abc.gif",
+  "illustration_url": "/uploads/xyz.svg",
   "labels": ["auth", "urgent"],
   "position": 0
 }
+```
+
+**Agent-friendly examples:**
+```bash
+# Get only Todo cards (small response)
+curl "$URL/api/projects/$PID/cards?column=Todo" -H "Authorization: Bearer $KEY"
+
+# Get first 5 bugs
+curl "$URL/api/projects/$PID/cards?card_type=bug&limit=5" -H "Authorization: Bearer $KEY"
+
+# Get UI cards in Review, page 1
+curl "$URL/api/projects/$PID/cards?column=Review&label=ui&limit=10" -H "Authorization: Bearer $KEY"
 ```
 
 ### Create a Card
@@ -165,7 +308,7 @@ Send only the fields you want to change:
 }
 ```
 
-Updatable fields: `title`, `description`, `card_type`, `column_name`, `position`, `priority`, `assignee_id`, `testing_status`, `testing_result`, `demo_gif_url`, `labels`.
+Updatable fields: `title`, `description`, `card_type`, `column_name`, `position`, `priority`, `assignee_id`, `testing_status`, `testing_result`, `demo_gif_url`, `illustration_url`, `labels`.
 
 ### Move a Card
 
@@ -181,7 +324,64 @@ Body:
 }
 ```
 
-Valid columns: `Backlog`, `Todo`, `In Progress`, `Review`, `Done` (or whatever the project is configured with).
+Valid columns: `Backlog`, `Proposed`, `Todo`, `In Progress`, `Review`, `Done` (or whatever the project is configured with).
+
+### Approve / Reject / Request Revision on a Card
+
+```
+POST /api/projects/<pid>/cards/<cid>/approve
+```
+
+Body:
+```json
+{
+  "action": "approve"
+}
+```
+
+To request revision (agent should modify and re-propose):
+```json
+{
+  "action": "revise",
+  "comment": "Description is unclear. Please add database schema and API endpoints."
+}
+```
+
+To reject permanently (feature not needed):
+```json
+{
+  "action": "reject",
+  "comment": "This feature is not needed for the project."
+}
+```
+
+Valid actions: `approve`, `reject`, `revise`. Only users with `owner`, `product_manager`, or `reviewer` role can perform these actions. Agents can also approve/reject cards in Review when `auto_review` is enabled on the project.
+
+- **`approve`** — Card moves to Todo, ready for implementation.
+- **`revise`** — Card stays in Proposed with `approval_status: "revision_requested"`. Agent should update the card based on feedback and re-propose.
+- **`reject`** — Card stays in Proposed with `approval_status: "rejected"`. Feature is not needed — do NOT re-propose.
+
+### Re-propose a Card (after revision)
+
+```
+POST /api/projects/<pid>/cards/<cid>/repropose
+```
+
+Body (optional):
+```json
+{
+  "comment": "Updated with detailed implementation plan."
+}
+```
+
+Only works on cards with `approval_status: "revision_requested"`. Resets status to `pending` so the product owner can review again. Agents should:
+1. Read the revision feedback from the card comments
+2. Update the card title/description/illustration based on feedback
+3. Call `/repropose` to re-submit
+
+**Approval flow**: Agent-created cards always go to the `Proposed` column with `approval_status: "pending"`. When approved, the card is auto-moved to `Todo`. Cards with `revision_requested` should be updated and re-proposed. Cards with `rejected` should NOT be re-proposed. Human-created cards go directly to Todo (no approval needed).
+
+**Auto-generated illustration**: When an agent creates a card that goes to Proposed, the server automatically generates an SVG wireframe/UI illustration based on the card's title and description. This helps the product owner visualize the proposed feature. The illustration is stored in `illustration_url` on the card and displayed in the card detail modal. If `ANTHROPIC_API_KEY` is set, the illustration is AI-generated; otherwise, a heuristic wireframe is created from keywords (form, modal, nav, table, chart, button, etc).
 
 ### Delete a Card
 
@@ -374,6 +574,303 @@ node watch.js --key $KEY --project $PID --json >> /tmp/kanban-events.log &
 tail -f /tmp/kanban-events.log | while read line; do
   echo "$line" | jq -r 'select(.event_type == "card_updated" and .column_name == "Todo")'
 done
+```
+
+## Auto-Pickup: Claiming Cards from Todo
+
+### Pickup API
+
+Atomically claim an unassigned card from Todo and move it to In Progress:
+
+```
+POST /api/projects/<pid>/cards/<cid>/pickup
+```
+
+No request body needed. The server:
+1. Verifies the card is in Todo and unassigned
+2. Uses a database lock (`SELECT FOR UPDATE`) to prevent race conditions
+3. Assigns the card to you and moves it to In Progress
+4. Adds an auto-comment noting the pickup
+
+Response: the full card object (now in In Progress, assigned to you).
+
+Errors:
+- `422` — Card not in Todo, or already assigned
+- `409` — Card was claimed by another agent (race condition)
+
+### Filtering Cards
+
+List cards with query filters to find available work:
+
+```
+GET /api/projects/<pid>/cards?column=Todo&unassigned=true
+```
+
+Query parameters:
+- `column` — Filter by column name (e.g., `Todo`, `In Progress`)
+- `unassigned=true` — Only cards with no assignee
+- `assignee=<user-id>` — Only cards assigned to a specific user
+
+### Worker Script (worker.js)
+
+A standalone script that polls Todo for unassigned cards and picks up the highest-priority one:
+
+```bash
+# Check once and print card as JSON (for agent integration)
+node worker.js --key duckllo_xxx --project <pid> --once
+
+# Preview without claiming
+node worker.js --key duckllo_xxx --project <pid> --dry-run --once
+
+# Continuous polling (every 60s by default)
+node worker.js --key duckllo_xxx --project <pid>
+
+# Custom interval (30 seconds)
+node worker.js --key duckllo_xxx --project <pid> --interval 30
+```
+
+Options:
+- `--key, -k` — API key (or `DUCKLLO_KEY` env var)
+- `--project, -p` — Project ID (or `DUCKLLO_PROJECT` env var)
+- `--url, -u` — Server URL (default: `http://localhost:3000`, or `DUCKLLO_URL`)
+- `--interval, -i` — Poll interval in seconds (default: 60)
+- `--once, -1` — Check once and exit
+- `--dry-run, -d` — Show what would be picked up without claiming
+
+The worker outputs the claimed card as JSON to stdout (status messages go to stderr), so you can pipe it:
+
+```bash
+CARD=$(node worker.js --key $KEY --project $PID --once 2>/dev/null)
+if [ -n "$CARD" ]; then
+  TITLE=$(echo "$CARD" | jq -r '.title')
+  echo "Working on: $TITLE"
+fi
+```
+
+### Agent Auto-Pickup Integration
+
+Add this to your agent loop or CLAUDE.md instructions:
+
+```bash
+# 1. Pick up next available card
+CARD=$(node worker.js --key $KEY --project $PID --once 2>/dev/null)
+
+# 2. If a card was returned, implement it
+if [ -n "$CARD" ]; then
+  CID=$(echo "$CARD" | jq -r '.id')
+  # ... implement the feature described in the card ...
+
+  # 3. Update with test results and demo
+  curl -X PATCH "$API/cards/$CID" \
+    -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
+    -d '{"testing_status":"passing","testing_result":"..."}'
+
+  # 4. Move to Review
+  curl -X POST "$API/cards/$CID/move" \
+    -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
+    -d '{"column_name":"Review","position":0}'
+fi
+```
+
+## Auto-Review: Agent Reviews Cards in Review
+
+When `auto_review` is enabled on a project, agents can automatically review and approve/reject cards in the Review column — no product owner action needed.
+
+### Toggle Auto-Review
+
+```
+PATCH /api/projects/<pid>/settings
+```
+
+Body:
+```json
+{
+  "auto_review": true
+}
+```
+
+Only `owner` and `product_manager` roles can toggle this setting. The toggle is also available in the board header UI.
+
+### Check Auto-Review Status and Cards
+
+```
+GET /api/projects/<pid>/auto-review
+```
+
+Returns the auto-review state and all cards currently in Review:
+```json
+{
+  "enabled": true,
+  "cards": [
+    { "id": "uuid", "title": "...", "testing_status": "passing", "demo_gif_url": "/uploads/...", ... }
+  ]
+}
+```
+
+When `enabled: false`, `cards` is always empty.
+
+### Agent Review Workflow
+
+When auto-review is ON, agents can approve, reject, or request revision on Review cards:
+
+```bash
+# Check if auto-review is enabled and get cards
+REVIEW=$(curl -s "$API/auto-review" -H "Authorization: Bearer $KEY")
+ENABLED=$(echo "$REVIEW" | jq -r '.enabled')
+
+if [ "$ENABLED" = "true" ]; then
+  # Review each card
+  echo "$REVIEW" | jq -c '.cards[]' | while read card; do
+    CID=$(echo "$card" | jq -r '.id')
+    TITLE=$(echo "$card" | jq -r '.title')
+    TESTS=$(echo "$card" | jq -r '.testing_status')
+    DEMO=$(echo "$card" | jq -r '.demo_gif_url')
+
+    # Approve if tests pass and demo exists
+    if [ "$TESTS" = "passing" ] && [ "$DEMO" != "null" ]; then
+      curl -s -X POST "$API/cards/$CID/approve" \
+        -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
+        -d "{\"action\":\"approve\",\"comment\":\"Auto-reviewed: tests passing, demo present\"}"
+    else
+      # Request revision if missing requirements
+      curl -s -X POST "$API/cards/$CID/approve" \
+        -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
+        -d "{\"action\":\"revise\",\"comment\":\"Missing: $([ \"$TESTS\" != \"passing\" ] && echo 'test results ')$([ \"$DEMO\" = \"null\" ] && echo 'demo media')\"}"
+    fi
+  done
+fi
+```
+
+### Permissions
+
+| auto_review | Agent can approve Review cards? | Agent can comment on Review cards? |
+|-------------|-------------------------------|-----------------------------------|
+| `true`      | Yes                           | Yes                               |
+| `false`     | No (only owner/product_manager/reviewer) | Yes (if member role) |
+
+When auto-review is OFF, the agent still has normal member permissions (can comment, but cannot approve/reject).
+
+## Bug Reports API
+
+Duckllo has a public bug reporting system. Projects can configure who can submit and view bug reports (anonymous, logged-in users, or members only). Security bugs are always member-only.
+
+### Submit a Bug Report
+
+```
+POST /api/projects/<pid>/bugs
+```
+
+Authentication is optional (depends on project settings). Include `Authorization` header if available.
+
+Body:
+```json
+{
+  "title": "Login button doesn't work on mobile",
+  "description": "The login button is unresponsive on iOS Safari",
+  "steps_to_reproduce": "1. Open app on iPhone\n2. Enter credentials\n3. Tap Login button\n4. Nothing happens",
+  "expected_behavior": "Should log in and redirect to dashboard",
+  "actual_behavior": "Button doesn't respond to taps",
+  "error_message": "TypeError: Cannot read property 'submit' of null",
+  "browser_info": "Safari 17.2 on iOS 17.1",
+  "url_location": "https://app.example.com/login",
+  "severity": "high",
+  "is_security_issue": false,
+  "reporter_name": "Jane Doe",
+  "reporter_email": "jane@example.com"
+}
+```
+
+Required: `title` (min 3 chars). Everything else is optional.
+
+Severity: `low`, `medium`, `high`, `critical`.
+
+### List Bug Reports
+
+```
+GET /api/projects/<pid>/bugs
+```
+
+Optional query params: `?status=new`, `?severity=critical`.
+
+Security bugs (`is_security_issue: true`) are only visible to project members.
+
+### Get Single Bug Report
+
+```
+GET /api/projects/<pid>/bugs/<bugId>
+```
+
+### Update Bug Status (members only)
+
+```
+PATCH /api/projects/<pid>/bugs/<bugId>
+```
+
+Body:
+```json
+{
+  "status": "triaged",
+  "linked_card_id": "<card-id>"
+}
+```
+
+Valid statuses: `new`, `triaged`, `in_progress`, `resolved`, `closed`, `wont_fix`.
+
+### Upload Screenshot for Bug
+
+```
+POST /api/projects/<pid>/bugs/<bugId>/screenshot
+Content-Type: multipart/form-data
+```
+
+```bash
+curl -X POST -F "file=@screenshot.png" \
+  http://localhost:3000/api/projects/<pid>/bugs/<bugId>/screenshot
+```
+
+### Bug Report Settings (owner only)
+
+```
+PATCH /api/projects/<pid>/settings
+```
+
+Body:
+```json
+{
+  "bug_report_settings": {
+    "submit_permission": "logged_in",
+    "view_permission": "member"
+  }
+}
+```
+
+Permission levels: `anonymous` (anyone), `logged_in` (authenticated users), `member` (project members only). Default is `member` for both.
+
+### Public Bug Report Page
+
+Users can submit bugs via the web form at:
+```
+http://localhost:3000/bugs.html?project=<pid>
+```
+
+Share this URL with testers, users, or embed it in your app.
+
+### Agent Bug Report Workflow
+
+```bash
+# 1. Check for new bug reports
+BUGS=$(curl -s "$API/bugs?status=new" -H "Authorization: Bearer $KEY")
+
+# 2. Triage a bug — link it to a card
+BUG_ID=$(echo "$BUGS" | jq -r '.[0].id')
+curl -s -X PATCH "$API/bugs/$BUG_ID" \
+  -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
+  -d "{\"status\":\"triaged\",\"linked_card_id\":\"$CARD_ID\"}"
+
+# 3. After fixing, mark as resolved
+curl -s -X PATCH "$API/bugs/$BUG_ID" \
+  -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
+  -d '{"status":"resolved"}'
 ```
 
 ## Error Handling

@@ -153,6 +153,7 @@ async function initDB() {
       ALTER TABLE cards ADD COLUMN IF NOT EXISTS due_date DATE;
       ALTER TABLE projects ADD COLUMN IF NOT EXISTS wip_limits JSONB DEFAULT '{}';
       ALTER TABLE projects ADD COLUMN IF NOT EXISTS auto_archive_days INTEGER DEFAULT 0;
+      ALTER TABLE projects ADD COLUMN IF NOT EXISTS auto_review BOOLEAN DEFAULT FALSE;
     END $$;
   `);
 
@@ -292,10 +293,10 @@ async function authenticate(req, res, next) {
 
     if (token.startsWith('duckllo_')) {
       // API key auth
-      const { rows: keys } = await pool.query('SELECT ak.*, u.id as uid, u.username FROM api_keys ak JOIN users u ON ak.user_id = u.id');
+      const { rows: keys } = await pool.query('SELECT ak.*, u.id as uid, u.username, u.display_name, u.system_role FROM api_keys ak JOIN users u ON ak.user_id = u.id');
       for (const key of keys) {
         if (bcrypt.compareSync(token, key.key_hash)) {
-          req.user = { id: key.uid, username: key.username };
+          req.user = { id: key.uid, username: key.username, display_name: key.display_name, system_role: key.system_role || 'user' };
           req.apiKeyProjectId = key.project_id;
           req.apiKeyPermissions = key.permissions;
           return next();
@@ -722,9 +723,12 @@ app.patch('/api/projects/:projectId/settings', authenticate, requireProjectAcces
   try {
     if (req.memberRole !== 'owner' && req.memberRole !== 'product_manager') return res.status(403).json({ error: 'Only owners and product managers can change project settings' });
 
-    const { auto_approve, bug_report_settings, wip_limits, auto_archive_days } = req.body;
+    const { auto_approve, auto_review, bug_report_settings, wip_limits, auto_archive_days } = req.body;
     if (auto_approve !== undefined) {
       await pool.query('UPDATE projects SET auto_approve = $1 WHERE id = $2', [!!auto_approve, req.params.projectId]);
+    }
+    if (auto_review !== undefined) {
+      await pool.query('UPDATE projects SET auto_review = $1 WHERE id = $2', [!!auto_review, req.params.projectId]);
     }
     if (auto_archive_days !== undefined) {
       const days = parseInt(auto_archive_days);
@@ -1177,16 +1181,20 @@ app.post('/api/projects/:projectId/cards/:cardId/pickup', authenticate, requireP
 
 app.post('/api/projects/:projectId/cards/:cardId/approve', authenticate, requireProjectAccess, async (req, res) => {
   try {
-    if (req.memberRole !== 'owner' && req.memberRole !== 'product_manager' && req.memberRole !== 'reviewer') {
-      return res.status(403).json({ error: 'Only product owners and reviewers can approve cards' });
+    const isPrivileged = req.memberRole === 'owner' || req.memberRole === 'product_manager' || req.memberRole === 'reviewer';
+    const isAgent = req.user && req.user.system_role === 'agent';
+    const autoReviewEnabled = !!req.project.auto_review;
+
+    if (!isPrivileged && !(isAgent && autoReviewEnabled)) {
+      return res.status(403).json({ error: autoReviewEnabled ? 'Only product owners, reviewers, and agents (auto-review) can approve cards' : 'Only product owners and reviewers can approve cards' });
     }
 
     const { rows: cards } = await pool.query('SELECT * FROM cards WHERE id = $1 AND project_id = $2', [req.params.cardId, req.params.projectId]);
     if (!cards[0]) return res.status(404).json({ error: 'Card not found' });
 
-    // Reviewers can only approve/reject cards in Review column
-    if (req.memberRole === 'reviewer' && cards[0].column_name !== 'Review') {
-      return res.status(403).json({ error: 'Reviewers can only approve or reject cards in the Review column' });
+    // Reviewers and agents (auto-review) can only approve/reject cards in Review column
+    if ((req.memberRole === 'reviewer' || (isAgent && !isPrivileged)) && cards[0].column_name !== 'Review') {
+      return res.status(403).json({ error: 'Can only approve or reject cards in the Review column' });
     }
 
     const { action, comment } = req.body; // action: 'approve', 'reject', or 'revise'
@@ -1227,6 +1235,25 @@ app.post('/api/projects/:projectId/cards/:cardId/approve', authenticate, require
     const { rows } = await pool.query('SELECT * FROM cards WHERE id = $1', [req.params.cardId]);
     broadcastToProject(req.params.projectId, 'card_updated', { card: rows[0], user: req.user.username });
     res.json(rows[0]);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// ── Auto-review status ──────────────────────────────────────────────────
+
+app.get('/api/projects/:projectId/auto-review', authenticate, requireProjectAccess, async (req, res) => {
+  try {
+    if (!req.project.auto_review) {
+      return res.json({ enabled: false, cards: [] });
+    }
+    // Return cards in Review that haven't been reviewed yet (approval_status not set or 'approved' from Proposed stage)
+    const { rows } = await pool.query(`
+      SELECT c.*, u.username as assignee_username, u.display_name as assignee_display_name
+      FROM cards c
+      LEFT JOIN users u ON c.assignee_id = u.id
+      WHERE c.project_id = $1 AND c.column_name = 'Review' AND c.archived_at IS NULL
+      ORDER BY c.priority DESC, c.updated_at ASC
+    `, [req.params.projectId]);
+    res.json({ enabled: true, cards: rows });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
