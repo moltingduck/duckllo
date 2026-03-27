@@ -14,8 +14,8 @@ This file is the single source of truth for how any agent (Claude or otherwise) 
 
 Every piece of work follows this flow:
 
-1. **Before coding**: Create a card in `Todo` with clear title, description, type, and priority. Add appropriate labels.
-2. **Start work**: Move card to `In Progress`.
+1. **Before coding**: Create a card via the API. Agent cards always go to `Proposed` (pending approval). Once the product owner approves, the card auto-moves to `Todo`. If the owner requests revision (`revision_requested`), update the card based on feedback comments and call `/repropose` to re-submit. If the card is `rejected`, do NOT re-propose — the feature is not needed.
+2. **Start work**: Use the pickup endpoint (`POST /cards/:cid/pickup`) to move the card from `Todo` to `In Progress` and assign yourself atomically. This ensures others can see who is working on what. Never leave cards in In Progress without an assignee.
 3. **While coding**: Add comments to the card describing approach, decisions, and blockers.
 4. **After coding**: Update the card with:
    - `testing_status`: `passing`, `failing`, or `partial`
