@@ -14,6 +14,75 @@ docker compose up --build -d
 
 Open [http://localhost:3000](http://localhost:3000) and register your first account.
 
+## Configure Duckllo Skill for Claude Code
+
+Duckllo ships with a `/duckllo` slash command that teaches Claude agents how to use the kanban API. Install it so any Claude Code agent can track work, create cards, and follow the approval workflow automatically.
+
+### Install the Skill
+
+```bash
+# Interactive — choose global or project-level
+./install.sh
+
+# Global — available to all Claude Code agents on this machine
+./install.sh --global
+
+# Project-specific — only agents working in a given project
+./install.sh --project /path/to/your/project
+
+# Custom server URL (default: http://localhost:3000)
+./install.sh --global --url https://duckllo.example.com
+
+# Overwrite an existing skill file
+./install.sh --global --force
+```
+
+The installer will ask for your Duckllo username (the developer/owner account). This ensures the agent always adds you as a project owner.
+
+### What the Installer Does
+
+1. Copies `SKILL.md` (the full API reference) to your Claude commands directory:
+   - **Global**: `~/.claude/commands/duckllo.md`
+   - **Project**: `<project>/.claude/commands/duckllo.md`
+2. Injects your server URL and owner username into the skill file
+3. Verifies the Duckllo server is reachable
+
+### What the Agent Does on First Use
+
+When an agent reads the `/duckllo` skill for the first time on a new project, it automatically:
+
+1. Registers an account on the Duckllo server (or logs in if one exists)
+2. Creates a project using the current folder/repo name
+3. Generates an API key for the project
+4. Adds you (the developer) as a project **owner**
+5. Injects the Duckllo workflow rules into the project's `CLAUDE.md`
+
+After setup, the agent follows the full kanban workflow: create cards in Proposed, wait for your approval, pick up approved cards, implement, test, attach demo media, and move to Review.
+
+### Using the Skill
+
+Once installed, just type `/duckllo` in any Claude Code conversation to load the skill. The agent will know how to:
+
+- Create and manage cards via the API
+- Follow the Proposed → Todo → In Progress → Review → Done workflow
+- Run tests and attach results to cards
+- Upload demo GIFs/screenshots
+- Watch for new tasks with `worker.js`
+
+### Manual Setup (Without Installer)
+
+If you prefer to set things up manually:
+
+1. Copy `SKILL.md` to `~/.claude/commands/duckllo.md` (or `.claude/commands/duckllo.md` in your project)
+2. Register an account at `http://localhost:3000`
+3. Create a project and generate an API key in Settings
+4. Store credentials in `.duckllo.env`:
+   ```bash
+   export DUCKLLO_URL="http://localhost:3000"
+   export DUCKLLO_PROJECT="<project-id>"
+   export DUCKLLO_KEY="duckllo_<your-key>"
+   ```
+
 ## Features
 
 ### Board & Cards
