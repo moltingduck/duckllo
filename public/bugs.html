@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Report a Bug - Duckllo</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <div id="bug-report-app">
+    <div class="bug-report-container">
+      <h1 class="logo">Duckllo</h1>
+      <h2 id="project-title">Report a Bug</h2>
+      <div id="auth-notice" class="auth-notice" style="display:none"></div>
+
+      <form id="bug-form" class="bug-form" style="display:none">
+        <label>Title <span class="required">*</span></label>
+        <input type="text" id="bug-title" placeholder="Brief summary of the bug" required minlength="3">
+
+        <label>Description</label>
+        <textarea id="bug-description" rows="3" placeholder="What happened?"></textarea>
+
+        <label>Steps to Reproduce</label>
+        <textarea id="bug-steps" rows="4" placeholder="1. Go to...&#10;2. Click on...&#10;3. See error"></textarea>
+
+        <label>Expected Behavior</label>
+        <textarea id="bug-expected" rows="2" placeholder="What should have happened?"></textarea>
+
+        <label>Actual Behavior</label>
+        <textarea id="bug-actual" rows="2" placeholder="What actually happened?"></textarea>
+
+        <label>Error Message</label>
+        <textarea id="bug-error" rows="2" placeholder="Paste any error messages, stack traces, or console output"></textarea>
+
+        <label>Browser / Environment</label>
+        <input type="text" id="bug-browser" placeholder="e.g. Chrome 120 on macOS 14">
+
+        <label>URL / Location</label>
+        <input type="text" id="bug-url" placeholder="Page URL or app location where the bug occurs">
+
+        <label>Severity</label>
+        <select id="bug-severity">
+          <option value="low">Low - Minor annoyance</option>
+          <option value="medium" selected>Medium - Affects functionality</option>
+          <option value="high">High - Major feature broken</option>
+          <option value="critical">Critical - App unusable / data loss</option>
+        </select>
+
+        <label class="checkbox-label">
+          <input type="checkbox" id="bug-security">
+          <span>This is a security issue (will only be visible to project members)</span>
+        </label>
+
+        <label>Screenshot</label>
+        <input type="file" id="bug-screenshot" accept=".png,.jpg,.jpeg,.gif,.webp">
+
+        <div id="reporter-fields" style="display:none">
+          <label>Your Name</label>
+          <input type="text" id="bug-reporter-name" placeholder="Optional">
+          <label>Your Email</label>
+          <input type="email" id="bug-reporter-email" placeholder="Optional — for follow-up">
+        </div>
+
+        <button type="submit" class="btn btn-primary" style="margin-top:16px;width:100%">Submit Bug Report</button>
+      </form>
+
+      <div id="bug-success" class="success-msg" style="display:none">
+        <h3>Bug report submitted!</h3>
+        <p>Thank you for reporting this issue. The project team will review it shortly.</p>
+        <button class="btn btn-primary" onclick="location.reload()">Submit Another</button>
+      </div>
+
+      <div id="bug-error-msg" class="error-msg"></div>
+    </div>
+  </div>
+
+  <script>
+    const params = new URLSearchParams(window.location.search);
+    const projectId = params.get('project');
+    const token = localStorage.getItem('duckllo_token');
+
+    if (!projectId) {
+      document.getElementById('bug-error-msg').textContent = 'No project specified. Add ?project=<id> to the URL.';
+    } else {
+      init();
+    }
+
+    async function init() {
+      // Check project bug settings
+      try {
+        const res = await fetch(`/api/projects/${projectId}/bug-settings`);
+        const data = await res.json();
+        if (!res.ok) { showError(data.error); return; }
+
+        document.getElementById('project-title').textContent = `Report a Bug — ${data.project_name}`;
+        document.title = `Report a Bug — ${data.project_name} - Duckllo`;
+
+        const perm = data.settings.submit_permission;
+        if (perm === 'anonymous') {
+          document.getElementById('bug-form').style.display = 'flex';
+          document.getElementById('reporter-fields').style.display = 'block';
+          // Auto-fill browser info
+          document.getElementById('bug-browser').value = navigator.userAgent.substring(0, 150);
+        } else if (perm === 'logged_in') {
+          if (!token) {
+            document.getElementById('auth-notice').style.display = 'block';
+            document.getElementById('auth-notice').innerHTML = 'You need to <a href="/">log in</a> to submit bug reports for this project.';
+            return;
+          }
+          document.getElementById('bug-form').style.display = 'flex';
+          document.getElementById('bug-browser').value = navigator.userAgent.substring(0, 150);
+        } else {
+          if (!token) {
+            document.getElementById('auth-notice').style.display = 'block';
+            document.getElementById('auth-notice').innerHTML = 'Only project members can submit bug reports. <a href="/">Log in</a> if you are a member.';
+            return;
+          }
+          document.getElementById('bug-form').style.display = 'flex';
+          document.getElementById('bug-browser').value = navigator.userAgent.substring(0, 150);
+        }
+      } catch (err) {
+        showError('Failed to load project settings: ' + err.message);
+      }
+    }
+
+    document.getElementById('bug-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const errorMsg = document.getElementById('bug-error-msg');
+      errorMsg.textContent = '';
+
+      const body = {
+        title: document.getElementById('bug-title').value.trim(),
+        description: document.getElementById('bug-description').value.trim() || undefined,
+        steps_to_reproduce: document.getElementById('bug-steps').value.trim() || undefined,
+        expected_behavior: document.getElementById('bug-expected').value.trim() || undefined,
+        actual_behavior: document.getElementById('bug-actual').value.trim() || undefined,
+        error_message: document.getElementById('bug-error').value.trim() || undefined,
+        browser_info: document.getElementById('bug-browser').value.trim() || undefined,
+        url_location: document.getElementById('bug-url').value.trim() || undefined,
+        severity: document.getElementById('bug-severity').value,
+        is_security_issue: document.getElementById('bug-security').checked,
+        reporter_name: document.getElementById('bug-reporter-name')?.value.trim() || undefined,
+        reporter_email: document.getElementById('bug-reporter-email')?.value.trim() || undefined,
+      };
+
+      const headers = { 'Content-Type': 'application/json' };
+      if (token) headers['Authorization'] = `Bearer ${token}`;
+
+      try {
+        const res = await fetch(`/api/projects/${projectId}/bugs`, {
+          method: 'POST', headers, body: JSON.stringify(body)
+        });
+        const data = await res.json();
+        if (!res.ok) { showError(data.error); return; }
+
+        // Upload screenshot if present
+        const screenshotFile = document.getElementById('bug-screenshot').files[0];
+        if (screenshotFile) {
+          const form = new FormData();
+          form.append('file', screenshotFile);
+          const uploadHeaders = {};
+          if (token) uploadHeaders['Authorization'] = `Bearer ${token}`;
+          await fetch(`/api/projects/${projectId}/bugs/${data.id}/screenshot`, {
+            method: 'POST', headers: uploadHeaders, body: form
+          });
+        }
+
+        document.getElementById('bug-form').style.display = 'none';
+        document.getElementById('bug-success').style.display = 'block';
+      } catch (err) {
+        showError('Submission failed: ' + err.message);
+      }
+    });
+
+    function showError(msg) {
+      document.getElementById('bug-error-msg').textContent = msg;
+    }
+  </script>
+</body>
+</html>
