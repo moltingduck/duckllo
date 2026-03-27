@@ -154,6 +154,7 @@ async function initDB() {
       ALTER TABLE projects ADD COLUMN IF NOT EXISTS wip_limits JSONB DEFAULT '{}';
       ALTER TABLE projects ADD COLUMN IF NOT EXISTS auto_archive_days INTEGER DEFAULT 0;
       ALTER TABLE projects ADD COLUMN IF NOT EXISTS auto_review BOOLEAN DEFAULT FALSE;
+      ALTER TABLE projects ADD COLUMN IF NOT EXISTS git_repo_url TEXT DEFAULT '';
     END $$;
   `);
 
@@ -723,12 +724,15 @@ app.patch('/api/projects/:projectId/settings', authenticate, requireProjectAcces
   try {
     if (req.memberRole !== 'owner' && req.memberRole !== 'product_manager') return res.status(403).json({ error: 'Only owners and product managers can change project settings' });
 
-    const { auto_approve, auto_review, bug_report_settings, wip_limits, auto_archive_days } = req.body;
+    const { auto_approve, auto_review, bug_report_settings, wip_limits, auto_archive_days, git_repo_url } = req.body;
     if (auto_approve !== undefined) {
       await pool.query('UPDATE projects SET auto_approve = $1 WHERE id = $2', [!!auto_approve, req.params.projectId]);
     }
     if (auto_review !== undefined) {
       await pool.query('UPDATE projects SET auto_review = $1 WHERE id = $2', [!!auto_review, req.params.projectId]);
+    }
+    if (git_repo_url !== undefined) {
+      await pool.query('UPDATE projects SET git_repo_url = $1 WHERE id = $2', [String(git_repo_url).trim(), req.params.projectId]);
     }
     if (auto_archive_days !== undefined) {
       const days = parseInt(auto_archive_days);

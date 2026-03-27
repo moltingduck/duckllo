@@ -740,7 +740,7 @@ async function loadComments(cardId) {
         <span class="comment-author">${escHtml(c.display_name || c.username || 'Agent')}</span>
         <span class="comment-time">${new Date(c.created_at).toLocaleString()}</span>
       </div>
-      <div class="comment-body">${escHtml(c.content)}</div>
+      <div class="comment-body">${linkifyCommits(escHtml(c.content))}</div>
     `;
     list.appendChild(div);
   });
@@ -1142,6 +1142,9 @@ document.getElementById('settings-btn').addEventListener('click', async () => {
   document.getElementById('new-key-display').style.display = 'none';
   await loadBugSettings();
 
+  // Git repo URL
+  document.getElementById('git-repo-url').value = projectData.git_repo_url || '';
+
   // Auto-archive days
   document.getElementById('auto-archive-days').value = projectData.auto_archive_days || 0;
 
@@ -1349,6 +1352,15 @@ function escHtml(str) {
   const div = document.createElement('div');
   div.textContent = str;
   return div.innerHTML;
+}
+
+function linkifyCommits(html) {
+  const repoUrl = (currentProject && currentProject.git_repo_url) ? currentProject.git_repo_url.replace(/\/$/, '') : '';
+  if (!repoUrl) return html;
+  // Match "Git commit: <hash>" or standalone 7-40 char hex hashes preceded by word boundary
+  return html.replace(/\b([0-9a-f]{7,40})\b/g, (match, hash) => {
+    return `<a href="${escHtml(repoUrl)}/commit/${hash}" target="_blank" rel="noopener" style="color:var(--accent);text-decoration:underline">${hash}</a>`;
+  });
 }
 
 function formatTimeAgo(date) {
@@ -1838,6 +1850,18 @@ document.getElementById('save-wip-limits-btn').addEventListener('click', async (
     currentProject.wip_limits = updated.wip_limits;
     await loadBoard();
     showToast('WIP limits saved', 'success');
+  } catch (err) { showToast(err.message); }
+});
+
+document.getElementById('save-git-repo-btn').addEventListener('click', async () => {
+  try {
+    const url = document.getElementById('git-repo-url').value.trim();
+    const updated = await api(`/projects/${currentProject.id}/settings`, {
+      method: 'PATCH',
+      body: { git_repo_url: url }
+    });
+    currentProject.git_repo_url = updated.git_repo_url;
+    showToast(url ? 'Git repo URL saved' : 'Git repo URL cleared', 'success');
   } catch (err) { showToast(err.message); }
 });
 
