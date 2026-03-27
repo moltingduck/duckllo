@@ -56,7 +56,7 @@ while [[ $# -gt 0 ]]; do
       echo "  --global         Install to ~/.claude/commands (all projects)"
       echo "  --project [path] Install to .claude/commands in current or given dir"
       echo "  --url URL        Duckllo server URL (default: http://localhost:3000)"
-      echo "  --force          Overwrite existing Duckllo config in CLAUDE.md"
+      echo "  --force          Overwrite existing skill file"
       echo "  (no args)        Interactive mode"
       exit 0 ;;
     *) err "Unknown option: $1"; exit 1 ;;
@@ -85,7 +85,6 @@ fi
 
 if [ "$MODE" = "global" ]; then
   COMMANDS_DIR="$HOME/.claude/commands"
-  CLAUDE_MD_TARGET="$HOME/.claude/CLAUDE.md"
 elif [ "$MODE" = "project" ]; then
   if [ -z "$TARGET_DIR" ]; then
     read -rp "Project path [$(pwd)]: " TARGET_DIR
@@ -93,7 +92,6 @@ elif [ "$MODE" = "project" ]; then
   fi
   TARGET_DIR="$(cd "$TARGET_DIR" && pwd)"
   COMMANDS_DIR="$TARGET_DIR/.claude/commands"
-  CLAUDE_MD_TARGET="$TARGET_DIR/CLAUDE.md"
 fi
 
 # ── Install slash command ────────────────────────────────────────────────
@@ -108,70 +106,56 @@ if [ -z "$DEV_USER" ]; then
 fi
 ok "Developer account: $DEV_USER"
 
-# ── Install slash command ────────────────────────────────────────────────
+# ── Install slash command with injected config ─────────────────────────
 
 mkdir -p "$COMMANDS_DIR"
-cp "$SKILL_FILE" "$COMMANDS_DIR/duckllo.md"
-ok "Installed /duckllo slash command → $COMMANDS_DIR/duckllo.md"
+DEST_FILE="$COMMANDS_DIR/duckllo.md"
 
-# ── Write CLAUDE.md config ──────────────────────────────────────────────
+if [ -f "$DEST_FILE" ] && [ "$FORCE" != true ]; then
+  if grep -q "Project Owner" "$DEST_FILE" 2>/dev/null; then
+    warn "Skill file already exists at $DEST_FILE — skipping."
+    warn "Use --force to overwrite."
+  else
+    cp "$SKILL_FILE" "$DEST_FILE"
+  fi
+else
+  cp "$SKILL_FILE" "$DEST_FILE"
+fi
 
-CONFIG_BLOCK="
-## Duckllo Kanban Integration
-
-This project uses Duckllo for task tracking. Run \`/duckllo\` for the full API reference.
+# Inject config block at the top of the skill file (after the title line)
+INJECT_BLOCK="
+## Project Configuration
 
 - **Server**: ${DUCKLLO_URL}
-- **Owner**: ${DEV_USER}
+- **Project Owner**: \`${DEV_USER}\` — always add this user as an \`owner\` member when creating a project
+- **Approval Flow**: Agent cards go to \`Proposed\` column. The owner \`${DEV_USER}\` approves them, which auto-moves them to \`Todo\`.
 
 ### First-Time Setup (agent does this automatically)
 On first use, the agent should:
 1. Register an account on the Duckllo server (or login if one exists)
-2. Create a project using the current folder/repo name: \`basename \$(git rev-parse --show-toplevel 2>/dev/null || pwd)\`
+2. Create a project using the current folder/repo name: \\\`basename \\\$(git rev-parse --show-toplevel 2>/dev/null || pwd)\\\`
 3. Generate an API key for the project
-4. **Add the developer \`${DEV_USER}\` as a project member** (POST /api/projects/<pid>/members with {\"username\":\"${DEV_USER}\",\"role\":\"owner\"})
-5. Store the Project ID and API key as a comment in this file
-
-### Mandatory Workflow (do not skip)
-1. **Before coding**: Create a card in Todo/In Progress with title, description, type, priority, and labels
-2. **While coding**: Add comments to the card with approach and decisions
-3. **After coding**: Update card with testing_status, testing_result, and demo GIF (if UI)
-4. **Commit**: Add a comment with the git commit hash
-5. **Move to Review/Done**: Server enforces quality gates — cards need test results or demo media
-
-### Quality Gate Labels
-Cards with these labels MUST have a demo GIF/media to move to Review/Done:
-\`ui\`, \`ux\`, \`frontend\`, \`user-operation\`, \`user-facing\`, \`demo-required\`
-
-All other cards need at least a test result.
+4. **Add the developer \\\`${DEV_USER}\\\` as a project member** (POST /api/projects/<pid>/members with {\"username\":\"${DEV_USER}\",\"role\":\"owner\"})
+5. Store the Project ID and API key as a comment in this file or in CLAUDE.md
 "
 
-if [ -f "$CLAUDE_MD_TARGET" ]; then
-  if grep -q "Duckllo Kanban Integration" "$CLAUDE_MD_TARGET" 2>/dev/null; then
-    if [ "$FORCE" = true ]; then
-      # Strip old Duckllo block and rewrite
-      python3 -c "
-import re
-with open('$CLAUDE_MD_TARGET') as f:
+# Insert config block before "## Quick Start"
+if grep -q "^## Quick Start" "$DEST_FILE" 2>/dev/null; then
+  python3 - "$DEST_FILE" "$INJECT_BLOCK" <<'PYEOF'
+import sys
+dest, block = sys.argv[1], sys.argv[2]
+with open(dest) as f:
     content = f.read()
-content = re.sub(r'\n## Duckllo Kanban Integration\n.*?(?=\n## |\Z)', '', content, flags=re.DOTALL)
-with open('$CLAUDE_MD_TARGET', 'w') as f:
-    f.write(content.rstrip())
-" 2>/dev/null
-      echo "$CONFIG_BLOCK" >> "$CLAUDE_MD_TARGET"
-      ok "Overwrote Duckllo config in $CLAUDE_MD_TARGET"
-    else
-      warn "Duckllo config already exists in $CLAUDE_MD_TARGET — skipping."
-      warn "Use --force to overwrite."
-    fi
-  else
-    echo "$CONFIG_BLOCK" >> "$CLAUDE_MD_TARGET"
-    ok "Appended Duckllo config to $CLAUDE_MD_TARGET"
-  fi
-else
-  echo "$CONFIG_BLOCK" > "$CLAUDE_MD_TARGET"
-  ok "Created $CLAUDE_MD_TARGET with Duckllo config"
+marker = '## Quick Start'
+idx = content.find(marker)
+if idx >= 0:
+    content = content[:idx] + block + '\n' + content[idx:]
+with open(dest, 'w') as f:
+    f.write(content)
+PYEOF
 fi
+
+ok "Installed /duckllo slash command → $DEST_FILE (with config for ${DEV_USER})"
 
 # ── Check server ────────────────────────────────────────────────────────
 
@@ -192,7 +176,7 @@ echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━
 echo ""
 echo "  Slash command:  /duckllo"
 echo "  Skill file:     $COMMANDS_DIR/duckllo.md"
-echo "  Config:         $CLAUDE_MD_TARGET"
+echo "  Owner account:  $DEV_USER"
 echo ""
 echo "The agent will auto-register and set up the project on first use."
 echo "Just start Claude Code and begin working — it reads /duckllo for instructions."

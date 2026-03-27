@@ -1,3 +1,6 @@
 node_modules/
 uploads/
 duckllo.db
+duckllo.db-shm
+duckllo.db-wal
+.duckllo.env
