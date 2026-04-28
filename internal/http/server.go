@@ -10,15 +10,27 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/moltingduck/duckllo/internal/config"
+	"github.com/moltingduck/duckllo/internal/uploads"
 )
 
 type Server struct {
-	cfg  *config.Config
-	pool *pgxpool.Pool
+	cfg     *config.Config
+	pool    *pgxpool.Pool
+	uploads *uploads.Store
+	events  *EventBus
 }
 
 func NewServer(cfg *config.Config, pool *pgxpool.Pool) *Server {
-	return &Server{cfg: cfg, pool: pool}
+	up, err := uploads.New(cfg.UploadsDir, cfg.MaxUploadBytes)
+	if err != nil {
+		panic("uploads init: " + err.Error())
+	}
+	return &Server{
+		cfg:     cfg,
+		pool:    pool,
+		uploads: up,
+		events:  NewEventBus(),
+	}
 }
 
 func (s *Server) Run(ctx context.Context) error {

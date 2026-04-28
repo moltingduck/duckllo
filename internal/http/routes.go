@@ -23,6 +23,10 @@ func (s *Server) routes() http.Handler {
 	r.Post("/api/auth/register", s.handleRegister)
 	r.Post("/api/auth/login", s.handleLogin)
 
+	// Static artifact serving — uploads are project-scoped behind the auth
+	// gate; for v1 we leave them open since the URL is unguessable (UUID).
+	r.Mount("/api/uploads/", s.uploads.Serve())
+
 	// Authenticated routes.
 	r.Group(func(r chi.Router) {
 		r.Use(s.authenticate)
@@ -48,6 +52,7 @@ func (s *Server) routes() http.Handler {
 			r.Post("/api-keys", s.handleCreateKey)
 			r.Delete("/api-keys/{keyID}", s.handleDeleteKey)
 
+			// Specs.
 			r.Get("/specs", s.handleListSpecs)
 			r.Post("/specs", s.handleCreateSpec)
 			r.Route("/specs/{specID}", func(r chi.Router) {
@@ -57,23 +62,45 @@ func (s *Server) routes() http.Handler {
 				r.Post("/approve", s.handleApproveSpec)
 				r.Post("/reject", s.handleRejectSpec)
 				r.Post("/plans", s.handleCreatePlan)
+				r.Post("/runs", s.handleCreateRun)
 			})
 
+			// Plans.
 			r.Patch("/plans/{planID}", s.handlePatchPlan)
 			r.Post("/plans/{planID}/approve", s.handleApprovePlan)
 
-			// Runs.
-			r.Post("/specs/{specID}/runs", s.handleCreateRun)
+			// Runs + iterations.
 			r.Route("/runs/{runID}", func(r chi.Router) {
 				r.Get("/", s.handleGetRun)
+				r.Get("/bundle", s.handleBundle)
 				r.Post("/abort", s.handleAbortRun)
 				r.Post("/heartbeat", s.handleHeartbeat)
 				r.Post("/advance", s.handleAdvanceRun)
 				r.Post("/iterations", s.handleAppendIteration)
+				r.Get("/verifications", s.handleListVerifications)
+				r.Post("/verifications", s.handlePostVerification)
 			})
 			r.Patch("/iterations/{iterID}", s.handlePatchIteration)
 
-			// Runner work claim is project-scoped.
+			// Verifications + annotations + comments.
+			r.Patch("/verifications/{verID}", s.handlePatchVerification)
+			r.Get("/verifications/{verID}/annotations", s.handleListAnnotations)
+			r.Post("/verifications/{verID}/annotations", s.handleAddAnnotation)
+			r.Get("/comments", s.handleListComments)
+			r.Post("/comments", s.handlePostComment)
+
+			// Topologies + harness rules.
+			r.Get("/topologies", s.handleListTopologies)
+			r.Post("/topologies", s.handleCreateTopology)
+			r.Get("/harness-rules", s.handleListRules)
+			r.Post("/harness-rules", s.handleCreateRule)
+			r.Patch("/harness-rules/{ruleID}", s.handlePatchRule)
+			r.Delete("/harness-rules/{ruleID}", s.handleDeleteRule)
+
+			// Live event stream.
+			r.Get("/events", s.handleEvents)
+
+			// Runner work claim.
 			r.Post("/work/claim", s.handleClaimWork)
 		})
 	})

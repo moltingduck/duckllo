@@ -56,6 +56,7 @@ func (s *Server) handleAppendIteration(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	s.publish(r, "iteration.appended", it)
 	writeJSON(w, http.StatusCreated, it)
 }
 
@@ -88,5 +89,6 @@ func (s *Server) handlePatchIteration(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	s.publish(r, "iteration.updated", updated)
 	writeJSON(w, http.StatusOK, updated)
 }

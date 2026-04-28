@@ -61,6 +61,7 @@ func (s *Server) handleCreateSpec(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	s.publish(r, "spec.created", spec)
 	writeJSON(w, http.StatusCreated, spec)
 }
 
@@ -136,6 +137,7 @@ func (s *Server) handlePatchSpec(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	s.publish(r, "spec.updated", updated)
 	writeJSON(w, http.StatusOK, updated)
 }
 
@@ -158,6 +160,7 @@ func (s *Server) handleAddCriterion(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	s.publish(r, "spec.criteria_changed", updated)
 	writeJSON(w, http.StatusOK, updated)
 }
 

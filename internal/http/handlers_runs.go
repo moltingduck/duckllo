@@ -64,6 +64,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	s.publish(r, "run.queued", run)
 	writeJSON(w, http.StatusCreated, run)
 }
 
@@ -215,6 +216,7 @@ func (s *Server) handleAdvanceRun(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	s.publish(r, "run.advanced", run)
 	writeJSON(w, http.StatusOK, run)
 }
 
