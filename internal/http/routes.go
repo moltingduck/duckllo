@@ -61,6 +61,20 @@ func (s *Server) routes() http.Handler {
 
 			r.Patch("/plans/{planID}", s.handlePatchPlan)
 			r.Post("/plans/{planID}/approve", s.handleApprovePlan)
+
+			// Runs.
+			r.Post("/specs/{specID}/runs", s.handleCreateRun)
+			r.Route("/runs/{runID}", func(r chi.Router) {
+				r.Get("/", s.handleGetRun)
+				r.Post("/abort", s.handleAbortRun)
+				r.Post("/heartbeat", s.handleHeartbeat)
+				r.Post("/advance", s.handleAdvanceRun)
+				r.Post("/iterations", s.handleAppendIteration)
+			})
+			r.Patch("/iterations/{iterID}", s.handlePatchIteration)
+
+			// Runner work claim is project-scoped.
+			r.Post("/work/claim", s.handleClaimWork)
 		})
 	})
 
