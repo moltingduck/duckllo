@@ -1,6 +1,19 @@
-node_modules/
+# Build artifacts
+/bin/
+/dist/
+/duckllo
+/runner
+
+# Local upload store (not source-of-truth)
 uploads/
-duckllo.db
-duckllo.db-shm
-duckllo.db-wal
+
+# Local env / secrets
+.env
 .duckllo.env
+
+# Editor
+.vscode/
+.idea/
+
+# OS
+.DS_Store

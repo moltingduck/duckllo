@@ -1,7 +1,10 @@
-node_modules
 .git
-docs
-test
-uploads
-duckllo.db*
-*.md
+.gitignore
+.dockerignore
+README.md
+SKILL.md
+CLAUDE.md
+docs/
+uploads/
+.duckllo.env
+.env

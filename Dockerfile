@@ -1,15 +1,16 @@
-FROM node:20-slim
+FROM golang:1.26-alpine AS build
+WORKDIR /src
 
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY . .
+RUN CGO_ENABLED=0 go build -ldflags="-s -w" -o /out/duckllo ./cmd/duckllo
+
+FROM gcr.io/distroless/static-debian12:nonroot
 WORKDIR /app
-
-COPY package.json package-lock.json ./
-RUN npm ci --omit=dev
-
-COPY server.js watch.js ./
-COPY public/ ./public/
-
-RUN mkdir -p uploads
-
+COPY --from=build /out/duckllo /usr/local/bin/duckllo
+USER nonroot:nonroot
 EXPOSE 3000
-
-CMD ["node", "server.js"]
+ENTRYPOINT ["/usr/local/bin/duckllo"]
+CMD ["serve"]
