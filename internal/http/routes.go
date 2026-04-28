@@ -47,6 +47,20 @@ func (s *Server) routes() http.Handler {
 			r.Get("/api-keys", s.handleListKeys)
 			r.Post("/api-keys", s.handleCreateKey)
 			r.Delete("/api-keys/{keyID}", s.handleDeleteKey)
+
+			r.Get("/specs", s.handleListSpecs)
+			r.Post("/specs", s.handleCreateSpec)
+			r.Route("/specs/{specID}", func(r chi.Router) {
+				r.Get("/", s.handleGetSpec)
+				r.Patch("/", s.handlePatchSpec)
+				r.Post("/criteria", s.handleAddCriterion)
+				r.Post("/approve", s.handleApproveSpec)
+				r.Post("/reject", s.handleRejectSpec)
+				r.Post("/plans", s.handleCreatePlan)
+			})
+
+			r.Patch("/plans/{planID}", s.handlePatchPlan)
+			r.Post("/plans/{planID}/approve", s.handleApprovePlan)
 		})
 	})
 
