@@ -1,0 +1,284 @@
+package http
+
+import (
+	"errors"
+	"net/http"
+
+	"github.com/google/uuid"
+
+	"github.com/moltingduck/duckllo/internal/auth"
+	"github.com/moltingduck/duckllo/internal/store"
+)
+
+type createProjectReq struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+}
+
+type patchProjectReq struct {
+	Name        *string `json:"name,omitempty"`
+	Description *string `json:"description,omitempty"`
+	GitRepoURL  *string `json:"git_repo_url,omitempty"`
+}
+
+func (s *Server) handleCreateProject(w http.ResponseWriter, r *http.Request) {
+	user := userFromCtx(r)
+	if user == nil {
+		writeError(w, http.StatusUnauthorized, "auth required")
+		return
+	}
+	var req createProjectReq
+	if err := decodeJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if req.Name == "" {
+		writeError(w, http.StatusBadRequest, "name required")
+		return
+	}
+	st := store.New(s.pool)
+	p, err := st.CreateProject(r.Context(), req.Name, req.Description, user.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusCreated, p)
+}
+
+func (s *Server) handleListProjects(w http.ResponseWriter, r *http.Request) {
+	user := userFromCtx(r)
+	if user == nil {
+		writeError(w, http.StatusUnauthorized, "auth required")
+		return
+	}
+	projects, err := store.New(s.pool).ListProjectsForUser(r.Context(), user.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, projects)
+}
+
+func (s *Server) handleGetProject(w http.ResponseWriter, r *http.Request) {
+	p := projectFromCtx(r)
+	if p == nil {
+		writeError(w, http.StatusNotFound, "project not loaded")
+		return
+	}
+	writeJSON(w, http.StatusOK, p)
+}
+
+func (s *Server) handlePatchProject(w http.ResponseWriter, r *http.Request) {
+	p := projectFromCtx(r)
+	if p == nil {
+		writeError(w, http.StatusNotFound, "project not loaded")
+		return
+	}
+	if !canEditProject(projectRoleFromCtx(r)) {
+		writeError(w, http.StatusForbidden, "only owners or product managers can edit a project")
+		return
+	}
+	var req patchProjectReq
+	if err := decodeJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	name, desc, repo := "", "", ""
+	if req.Name != nil {
+		name = *req.Name
+	}
+	if req.Description != nil {
+		desc = *req.Description
+	}
+	if req.GitRepoURL != nil {
+		repo = *req.GitRepoURL
+	}
+	updated, err := store.New(s.pool).UpdateProject(r.Context(), p.ID, name, desc, repo)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, updated)
+}
+
+func (s *Server) handleDeleteProject(w http.ResponseWriter, r *http.Request) {
+	p := projectFromCtx(r)
+	if p == nil {
+		writeError(w, http.StatusNotFound, "project not loaded")
+		return
+	}
+	user := userFromCtx(r)
+	if user == nil || (p.OwnerID != user.ID && user.SystemRole != "admin") {
+		writeError(w, http.StatusForbidden, "only the owner or an admin can delete a project")
+		return
+	}
+	if err := store.New(s.pool).DeleteProject(r.Context(), p.ID); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) handleListMembers(w http.ResponseWriter, r *http.Request) {
+	p := projectFromCtx(r)
+	if p == nil {
+		writeError(w, http.StatusNotFound, "project not loaded")
+		return
+	}
+	members, err := store.New(s.pool).ListProjectMembers(r.Context(), p.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, members)
+}
+
+type addMemberReq struct {
+	Username string `json:"username"`
+	UserID   string `json:"user_id"`
+	Role     string `json:"role"`
+}
+
+func (s *Server) handleAddMember(w http.ResponseWriter, r *http.Request) {
+	if !canEditProject(projectRoleFromCtx(r)) {
+		writeError(w, http.StatusForbidden, "only product managers can add members")
+		return
+	}
+	p := projectFromCtx(r)
+	var req addMemberReq
+	if err := decodeJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if req.Role == "" {
+		req.Role = "developer"
+	}
+	st := store.New(s.pool)
+
+	var uid uuid.UUID
+	if req.UserID != "" {
+		parsed, err := uuid.Parse(req.UserID)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "invalid user_id")
+			return
+		}
+		uid = parsed
+	} else {
+		u, err := st.UserByUsername(r.Context(), req.Username)
+		if errors.Is(err, store.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "user not found")
+			return
+		}
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		uid = u.ID
+	}
+	if err := st.AddProjectMember(r.Context(), p.ID, uid, req.Role); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) handleRemoveMember(w http.ResponseWriter, r *http.Request) {
+	if !canEditProject(projectRoleFromCtx(r)) {
+		writeError(w, http.StatusForbidden, "only product managers can remove members")
+		return
+	}
+	p := projectFromCtx(r)
+	uidStr := chiURLParam(r, "userID")
+	uid, err := uuid.Parse(uidStr)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid user id")
+		return
+	}
+	if err := store.New(s.pool).RemoveProjectMember(r.Context(), p.ID, uid); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+type createKeyReq struct {
+	Label       string   `json:"label"`
+	Permissions []string `json:"permissions"`
+}
+
+func (s *Server) handleListKeys(w http.ResponseWriter, r *http.Request) {
+	if !canEditProject(projectRoleFromCtx(r)) {
+		writeError(w, http.StatusForbidden, "only product managers can list api keys")
+		return
+	}
+	p := projectFromCtx(r)
+	keys, err := store.New(s.pool).ListAPIKeysForProject(r.Context(), p.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, keys)
+}
+
+func (s *Server) handleCreateKey(w http.ResponseWriter, r *http.Request) {
+	if !canEditProject(projectRoleFromCtx(r)) {
+		writeError(w, http.StatusForbidden, "only product managers can mint api keys")
+		return
+	}
+	user := userFromCtx(r)
+	p := projectFromCtx(r)
+	var req createKeyReq
+	if err := decodeJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if len(req.Permissions) == 0 {
+		req.Permissions = []string{"read", "write"}
+	}
+	plain, prefix, hash, err := auth.MintAPIKey()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	permsJSON, _ := jsonMarshal(req.Permissions)
+	rec, err := store.New(s.pool).CreateAPIKey(r.Context(), user.ID, p.ID, req.Label, prefix, hash, permsJSON)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]any{
+		"api_key": rec,
+		"plain":   plain,
+		"warning": "store this token now — it will not be shown again",
+	})
+}
+
+func (s *Server) handleDeleteKey(w http.ResponseWriter, r *http.Request) {
+	if !canEditProject(projectRoleFromCtx(r)) {
+		writeError(w, http.StatusForbidden, "only product managers can delete api keys")
+		return
+	}
+	p := projectFromCtx(r)
+	id, err := uuid.Parse(chiURLParam(r, "keyID"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid key id")
+		return
+	}
+	if err := store.New(s.pool).DeleteAPIKey(r.Context(), id, p.ID); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "key not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func canEditProject(role string) bool {
+	switch role {
+	case "product_manager", "owner", "admin":
+		return true
+	}
+	return false
+}

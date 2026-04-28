@@ -19,8 +19,36 @@ func (s *Server) routes() http.Handler {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
 
-	// Real route groups land here in subsequent commits:
-	//   /api/auth, /api/projects, /api/projects/{pid}/specs, /api/projects/{pid}/runs, ...
+	// Public auth surface.
+	r.Post("/api/auth/register", s.handleRegister)
+	r.Post("/api/auth/login", s.handleLogin)
+
+	// Authenticated routes.
+	r.Group(func(r chi.Router) {
+		r.Use(s.authenticate)
+
+		r.Get("/api/auth/me", s.handleMe)
+		r.Post("/api/auth/logout", s.handleLogout)
+
+		r.Get("/api/projects", s.handleListProjects)
+		r.Post("/api/projects", s.handleCreateProject)
+
+		r.Route("/api/projects/{projectID}", func(r chi.Router) {
+			r.Use(s.requireProjectAccess)
+
+			r.Get("/", s.handleGetProject)
+			r.Patch("/", s.handlePatchProject)
+			r.Delete("/", s.handleDeleteProject)
+
+			r.Get("/members", s.handleListMembers)
+			r.Post("/members", s.handleAddMember)
+			r.Delete("/members/{userID}", s.handleRemoveMember)
+
+			r.Get("/api-keys", s.handleListKeys)
+			r.Post("/api-keys", s.handleCreateKey)
+			r.Delete("/api-keys/{keyID}", s.handleDeleteKey)
+		})
+	})
 
 	return r
 }

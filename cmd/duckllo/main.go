@@ -14,6 +14,7 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/moltingduck/duckllo/internal/bootstrap"
 	"github.com/moltingduck/duckllo/internal/config"
 	"github.com/moltingduck/duckllo/internal/db"
 	httpapi "github.com/moltingduck/duckllo/internal/http"
@@ -79,6 +80,9 @@ func runServe() error {
 
 	if err := db.Migrate(ctx, pool); err != nil {
 		return fmt.Errorf("auto-migrate: %w", err)
+	}
+	if err := bootstrap.Run(ctx, pool); err != nil {
+		return fmt.Errorf("bootstrap: %w", err)
 	}
 
 	srv := httpapi.NewServer(cfg, pool)
