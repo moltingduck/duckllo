@@ -106,6 +106,21 @@ func (s *Server) handlePatchSpec(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Once a spec is approved (or any later state), its contract — intent,
+	// acceptance criteria, reference assets, affected components — is
+	// frozen. Otherwise an in-flight run would be evaluated against a
+	// different target than the one it was started for. Title / priority /
+	// assignee are organisational metadata and stay editable. The Web UI
+	// hides the edit affordances past 'proposed' but the API has to enforce
+	// it too.
+	mutatesContract := req.Intent != nil || req.AcceptanceCriteria != nil ||
+		req.ReferenceAssets != nil || req.AffectedComponents != nil
+	if mutatesContract && !specContractEditable(spec.Status) {
+		writeError(w, http.StatusConflict,
+			"spec contract is frozen at status '"+spec.Status+"' — only draft or proposed specs can edit intent / criteria / assets / components")
+		return
+	}
+
 	patch := store.SpecPatch{Title: req.Title, Intent: req.Intent, Priority: req.Priority, Status: req.Status}
 	if req.AssigneeID != nil {
 		if *req.AssigneeID == "" {
@@ -144,6 +159,11 @@ func (s *Server) handlePatchSpec(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleAddCriterion(w http.ResponseWriter, r *http.Request) {
 	spec, ok := loadSpec(s, w, r)
 	if !ok {
+		return
+	}
+	if !specContractEditable(spec.Status) {
+		writeError(w, http.StatusConflict,
+			"spec contract is frozen at status '"+spec.Status+"' — criteria can only be added in draft or proposed")
 		return
 	}
 	var crit models.AcceptanceCriterion
@@ -233,3 +253,12 @@ func loadSpec(s *Server, w http.ResponseWriter, r *http.Request) (*models.Spec, 
 }
 
 func ptr[T any](v T) *T { return &v }
+
+// specContractEditable returns true when the spec status still allows the
+// contract (intent, acceptance_criteria, reference_assets,
+// affected_components) to be edited — i.e. before the PM signs off.
+// 'approved' onward freezes the contract so an in-flight run can't be
+// re-targeted underneath the runner.
+func specContractEditable(status string) bool {
+	return status == "draft" || status == "proposed"
+}

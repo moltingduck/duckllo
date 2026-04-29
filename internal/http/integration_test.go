@@ -930,6 +930,50 @@ func TestPlanApproval_AgentCanApproveOwnPlan(t *testing.T) {
 		nil, nil, http.StatusOK)
 }
 
+// TestSpecContract_FrozenAfterApproval enforces the selfhost rule
+// "Spec contract is locked once approved" at the API boundary. Once a
+// spec is past 'proposed' (i.e. approved/running/validated/etc.) the
+// contract — intent, acceptance criteria, reference assets, affected
+// components — must not be mutated. Otherwise an in-flight run is
+// evaluated against a different target than the one it was started
+// against, which silently invalidates whatever the model produced.
+// Title / priority / assignee remain editable as organisational metadata.
+func TestSpecContract_FrozenAfterApproval(t *testing.T) {
+	e := setupTestEnv(t)
+
+	var spec map[string]any
+	e.c.do("POST", "/api/projects/"+e.pid+"/specs", e.c.token,
+		map[string]any{"title": "frozen test", "intent": "v1"}, &spec, http.StatusCreated)
+	sid := spec["id"].(string)
+	e.c.do("POST", "/api/projects/"+e.pid+"/specs/"+sid+"/criteria", e.c.token,
+		map[string]any{"text": "v1 criterion", "sensor_kind": "judge"}, nil, http.StatusOK)
+	e.c.do("POST", "/api/projects/"+e.pid+"/specs/"+sid+"/approve", e.c.token, nil, nil, http.StatusOK)
+
+	// PATCH intent post-approval → 409.
+	res := e.c.raw("PATCH", "/api/projects/"+e.pid+"/specs/"+sid, e.c.token,
+		map[string]any{"intent": "v2"})
+	if res.StatusCode != http.StatusConflict {
+		body, _ := io.ReadAll(res.Body)
+		res.Body.Close()
+		t.Fatalf("intent edit post-approval: got %d: %s", res.StatusCode, body)
+	}
+	res.Body.Close()
+
+	// Append criterion post-approval → 409.
+	res2 := e.c.raw("POST", "/api/projects/"+e.pid+"/specs/"+sid+"/criteria", e.c.token,
+		map[string]any{"text": "second criterion", "sensor_kind": "judge"})
+	if res2.StatusCode != http.StatusConflict {
+		body, _ := io.ReadAll(res2.Body)
+		res2.Body.Close()
+		t.Fatalf("criterion add post-approval: got %d: %s", res2.StatusCode, body)
+	}
+	res2.Body.Close()
+
+	// Title PATCH post-approval is still allowed (organisational metadata).
+	e.c.do("PATCH", "/api/projects/"+e.pid+"/specs/"+sid, e.c.token,
+		map[string]any{"title": "renamed"}, nil, http.StatusOK)
+}
+
 // TestEnqueueRun_GatedOnApprovedStatus locks in the atomic gate added
 // to EnqueueRun. Prior to the fix, POST /specs/{sid}/runs would happily
 // create a second run on an already-running spec — two runners would
