@@ -30,8 +30,9 @@ runner:
 
 build:
 	mkdir -p bin
-	CGO_ENABLED=0 go build -o bin/duckllo ./cmd/duckllo
-	CGO_ENABLED=0 go build -o bin/runner  ./cmd/runner
+	CGO_ENABLED=0 go build -o bin/duckllo     ./cmd/duckllo
+	CGO_ENABLED=0 go build -o bin/runner      ./cmd/runner
+	CGO_ENABLED=0 go build -o bin/mcp-duckllo ./cmd/mcp-duckllo
 
 test:
 	@if [ -z "$$TEST_DATABASE_URL" ]; then \
