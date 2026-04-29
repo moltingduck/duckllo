@@ -312,6 +312,72 @@ func mustReadBody(res *http.Response) string {
 
 // ─── Additional integration tests ─────────────────────────────────────────
 
+// TestAnnotationEnqueuesCorrectWorkItem locks in the bug fix where
+// fix_required annotations flipped run.status to 'correcting' but did
+// not insert a 'correct' work_queue entry — meaning the corrector
+// agent had nothing to claim and the run sat stuck in 'correcting'
+// forever. After the fix, posting a fix_required annotation must
+// produce a claimable correct work item, and posting a second one
+// must NOT create a duplicate (the IDEMPOTENT clause).
+func TestAnnotationEnqueuesCorrectWorkItem(t *testing.T) {
+	e := setupTestEnv(t)
+
+	var spec map[string]any
+	e.c.do("POST", "/api/projects/"+e.pid+"/specs", e.c.token,
+		map[string]any{"title": "annot enqueue", "intent": "x"}, &spec, http.StatusCreated)
+	sid := spec["id"].(string)
+	e.c.do("POST", "/api/projects/"+e.pid+"/specs/"+sid+"/criteria", e.c.token,
+		map[string]any{"text": "ok", "sensor_kind": "screenshot"}, nil, http.StatusOK)
+	e.c.do("POST", "/api/projects/"+e.pid+"/specs/"+sid+"/approve", e.c.token, nil, nil, http.StatusOK)
+	rid, _ := e.runRunnerThroughValidate(t, sid)
+
+	// Post a verification + fix_required annotation.
+	var verif map[string]any
+	e.c.do("POST", "/api/projects/"+e.pid+"/runs/"+rid+"/verifications", e.apiKey,
+		map[string]any{
+			"kind": "screenshot", "class": "computational",
+			"status": "fail", "summary": "missing toggle",
+			"artifact_url": "/api/uploads/x.png",
+		}, &verif, http.StatusCreated)
+	vid := verif["id"].(string)
+
+	e.c.do("POST", "/api/projects/"+e.pid+"/verifications/"+vid+"/annotations", e.c.token,
+		map[string]any{
+			"bbox":    map[string]any{"x": 0.1, "y": 0.1, "w": 0.2, "h": 0.05},
+			"body":    "fix this",
+			"verdict": "fix_required",
+		}, nil, http.StatusCreated)
+
+	// A claim with phase=correct must succeed (not return 204).
+	var claim struct {
+		WorkItem map[string]any `json:"work_item"`
+	}
+	e.c.do("POST", "/api/projects/"+e.pid+"/work/claim", e.apiKey,
+		map[string]any{"runner_id": "test-corrector", "phases": []string{"correct"}},
+		&claim, http.StatusOK)
+	if claim.WorkItem["phase"] != "correct" {
+		t.Fatalf("expected correct phase claimed, got %v", claim.WorkItem["phase"])
+	}
+
+	// A second annotation must NOT create a duplicate work item — the
+	// existing claimed/pending one already covers it. The next claim
+	// from a different runner should return 204 because the only
+	// correct item is held by test-corrector.
+	e.c.do("POST", "/api/projects/"+e.pid+"/verifications/"+vid+"/annotations", e.c.token,
+		map[string]any{
+			"bbox":    map[string]any{"x": 0.5, "y": 0.5, "w": 0.1, "h": 0.1},
+			"body":    "also fix this",
+			"verdict": "fix_required",
+		}, nil, http.StatusCreated)
+	res := e.c.raw("POST", "/api/projects/"+e.pid+"/work/claim", e.apiKey,
+		map[string]any{"runner_id": "another-corrector", "phases": []string{"correct"}})
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusNoContent {
+		body, _ := io.ReadAll(res.Body)
+		t.Fatalf("second corrector claim should be 204; got %d: %s", res.StatusCode, body)
+	}
+}
+
 // TestAnnotationFlipsRunToCorrecting exercises the harness's correction
 // signal: a fix_required annotation must move the parent run from
 // 'validating' to 'correcting' so the corrector phase becomes claimable.

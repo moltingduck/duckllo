@@ -32,16 +32,35 @@ func (s *Store) CreateAnnotation(ctx context.Context, in AnnotationInput) (*mode
 		return nil, err
 	}
 
-	// Posting a fix_required annotation flips the parent run into 'correcting'
-	// so the corrector agent will see the signal on its next claim. Resolved
-	// annotations don't trigger this.
+	// Posting a fix_required annotation flips the parent run into
+	// 'correcting' AND enqueues a 'correct' work item. Without the
+	// queue insertion the runner has nothing to claim — the run sits
+	// in 'correcting' status forever and the corrector never fires.
+	// Idempotent: if a correct item is already pending for the run,
+	// the WHERE clause prevents a duplicate.
 	if in.Verdict == "fix_required" {
-		_, _ = s.Pool.Exec(ctx, `
-			UPDATE runs SET status = 'correcting', updated_at = NOW()
-			WHERE id = (
-				SELECT v.run_id FROM verifications v WHERE v.id = $1
-			) AND status NOT IN ('done','failed','aborted')
-		`, in.VerificationID)
+		tx, err := s.Pool.Begin(ctx)
+		if err == nil {
+			defer tx.Rollback(ctx) //nolint:errcheck
+			_, _ = tx.Exec(ctx, `
+				UPDATE runs SET status = 'correcting', updated_at = NOW()
+				WHERE id = (SELECT v.run_id FROM verifications v WHERE v.id = $1)
+				  AND status NOT IN ('done','failed','aborted')
+			`, in.VerificationID)
+			_, _ = tx.Exec(ctx, `
+				INSERT INTO work_queue (run_id, phase, status)
+				SELECT v.run_id, 'correct', 'pending'
+				  FROM verifications v
+				 WHERE v.id = $1
+				   AND NOT EXISTS (
+					   SELECT 1 FROM work_queue w
+					    WHERE w.run_id = v.run_id
+					      AND w.phase  = 'correct'
+					      AND w.status IN ('pending','claimed')
+				   )
+			`, in.VerificationID)
+			_ = tx.Commit(ctx)
+		}
 	}
 	return &a, nil
 }
