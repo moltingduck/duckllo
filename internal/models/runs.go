@@ -26,20 +26,21 @@ type Run struct {
 }
 
 type Iteration struct {
-	ID                uuid.UUID  `json:"id"`
-	RunID             uuid.UUID  `json:"run_id"`
-	Idx               int        `json:"idx"`
-	Phase             string     `json:"phase"`
-	AgentRole         string     `json:"agent_role"`
-	Provider          string     `json:"provider"`
-	Model             string     `json:"model"`
-	Summary           string     `json:"summary"`
-	TranscriptURL     string     `json:"transcript_url"`
-	PromptTokens      int        `json:"prompt_tokens"`
-	CompletionTokens  int        `json:"completion_tokens"`
-	Status            string     `json:"status"`
-	StartedAt         time.Time  `json:"started_at"`
-	FinishedAt        *time.Time `json:"finished_at,omitempty"`
+	ID               uuid.UUID  `json:"id"`
+	RunID            uuid.UUID  `json:"run_id"`
+	Idx              int        `json:"idx"`
+	Phase            string     `json:"phase"`
+	AgentRole        string     `json:"agent_role"`
+	Provider         string     `json:"provider"`
+	Model            string     `json:"model"`
+	Summary          string     `json:"summary"`
+	Transcript       string     `json:"transcript"`
+	TranscriptURL    string     `json:"transcript_url"`
+	PromptTokens     int        `json:"prompt_tokens"`
+	CompletionTokens int        `json:"completion_tokens"`
+	Status           string     `json:"status"`
+	StartedAt        time.Time  `json:"started_at"`
+	FinishedAt       *time.Time `json:"finished_at,omitempty"`
 }
 
 type WorkItem struct {

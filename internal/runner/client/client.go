@@ -273,7 +273,8 @@ type PostIterationReq struct {
 	Provider      string `json:"provider"`
 	Model         string `json:"model"`
 	Summary       string `json:"summary"`
-	TranscriptURL string `json:"transcript_url"`
+	Transcript    string `json:"transcript,omitempty"`
+	TranscriptURL string `json:"transcript_url,omitempty"`
 }
 
 func (c *Client) PostIteration(ctx context.Context, runID uuid.UUID, req PostIterationReq) (*Iteration, error) {
@@ -287,6 +288,7 @@ func (c *Client) PostIteration(ctx context.Context, runID uuid.UUID, req PostIte
 
 type PatchIterationReq struct {
 	Summary          *string `json:"summary,omitempty"`
+	Transcript       *string `json:"transcript,omitempty"`
 	PromptTokens     *int    `json:"prompt_tokens,omitempty"`
 	CompletionTokens *int    `json:"completion_tokens,omitempty"`
 	Status           *string `json:"status,omitempty"`

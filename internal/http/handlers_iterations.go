@@ -15,7 +15,8 @@ type appendIterationReq struct {
 	Provider      string `json:"provider"`
 	Model         string `json:"model"`
 	Summary       string `json:"summary"`
-	TranscriptURL string `json:"transcript_url"`
+	Transcript    string `json:"transcript,omitempty"`
+	TranscriptURL string `json:"transcript_url,omitempty"`
 }
 
 func (s *Server) handleAppendIteration(w http.ResponseWriter, r *http.Request) {
@@ -51,7 +52,7 @@ func (s *Server) handleAppendIteration(w http.ResponseWriter, r *http.Request) {
 	if req.Provider == "" {
 		req.Provider = "anthropic"
 	}
-	it, err := st.AppendIteration(r.Context(), run.ID, req.Phase, req.AgentRole, req.Provider, req.Model, req.Summary, req.TranscriptURL)
+	it, err := st.AppendIteration(r.Context(), run.ID, req.Phase, req.AgentRole, req.Provider, req.Model, req.Summary, req.TranscriptURL, req.Transcript)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -62,6 +63,7 @@ func (s *Server) handleAppendIteration(w http.ResponseWriter, r *http.Request) {
 
 type patchIterationReq struct {
 	Summary          *string `json:"summary,omitempty"`
+	Transcript       *string `json:"transcript,omitempty"`
 	PromptTokens     *int    `json:"prompt_tokens,omitempty"`
 	CompletionTokens *int    `json:"completion_tokens,omitempty"`
 	Status           *string `json:"status,omitempty"`
@@ -79,7 +81,11 @@ func (s *Server) handlePatchIteration(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	updated, err := store.New(s.pool).UpdateIteration(r.Context(), iid, store.IterationPatch{
-		Summary: req.Summary, PromptTokens: req.PromptTokens, CompletionTokens: req.CompletionTokens, Status: req.Status,
+		Summary:          req.Summary,
+		Transcript:       req.Transcript,
+		PromptTokens:     req.PromptTokens,
+		CompletionTokens: req.CompletionTokens,
+		Status:           req.Status,
 	})
 	if errors.Is(err, store.ErrNotFound) {
 		writeError(w, http.StatusNotFound, "iteration not found")

@@ -69,6 +69,17 @@ async function refresh(mount, pid, rid) {
           `${new Date(it.started_at).toLocaleTimeString()} · ${it.provider}/${it.model || "?"} · in=${it.prompt_tokens} out=${it.completion_tokens}`),
         el("p", { style: "margin-top:6px" }, it.summary || el("span", { class: "muted" }, "(no summary)")),
       ]);
+      // Expandable transcript so a human can read the full prompt + response
+      // (or multi-turn conversation for the executor) without hitting the API.
+      if (it.transcript) {
+        const det = el("details", { style: "margin-top:6px" });
+        det.appendChild(el("summary", { style: "cursor:pointer;color:var(--accent);font-size:12px" },
+          "View transcript"));
+        const pre = el("pre", { class: "mono", style: "white-space:pre-wrap;font-size:11px;max-height:360px;overflow:auto;background:var(--bg-elev);padding:8px;border-radius:4px;margin-top:6px" });
+        pre.textContent = it.transcript;
+        det.appendChild(pre);
+        card.appendChild(det);
+      }
       leftCol.appendChild(card);
     }
   }

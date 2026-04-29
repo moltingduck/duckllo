@@ -252,7 +252,14 @@ func (o *Orchestrator) runExecutor(ctx context.Context, work *client.WorkItem, b
 		summary = trimSummary(lastResp.Text, 280)
 	}
 	log.Printf("execute: posting iteration with summary=%q", summary)
-	it, err := o.postIteration(ctx, work.RunID, "execute", "executor", summary, lastResp)
+
+	// Multi-turn transcript: serialise the whole conversation so the run
+	// dashboard's iteration timeline can show every tool call and its
+	// result, not just the final summary. Capped at ~64 KiB so a runaway
+	// executor doesn't blow the iterations.transcript column out.
+	transcript := flattenExecutorTranscript(systemPromptFor("executor"), msgs)
+	it, err := o.postIterationWithTranscript(ctx, work.RunID, "execute", "executor",
+		summary, lastResp, transcript)
 	if err != nil {
 		log.Printf("execute: postIteration failed: %v", err)
 		return err
@@ -495,7 +502,51 @@ func (o *Orchestrator) runCorrector(ctx context.Context, work *client.WorkItem, 
 	})
 }
 
-func (o *Orchestrator) postIteration(ctx context.Context, runID uuid.UUID, phase, role, summary string, resp *agent.Response) (*client.Iteration, error) {
+// flattenExecutorTranscript renders the executor's full message history
+// into a human-readable transcript for the iterations.transcript column.
+// We cap at 64 KiB so a runaway loop can't bloat the row indefinitely;
+// the (truncated) marker tells the reader where the cut happened.
+func flattenExecutorTranscript(system string, msgs []agent.Message) string {
+	const cap = 64 * 1024
+	var b strings.Builder
+	if system != "" {
+		b.WriteString("# System\n")
+		b.WriteString(system)
+		b.WriteString("\n\n")
+	}
+	for _, m := range msgs {
+		switch m.Role {
+		case "tool":
+			fmt.Fprintf(&b, "# tool result (%s)\n%s\n\n", m.ToolID, m.Content)
+		case "assistant":
+			b.WriteString("# assistant\n")
+			if m.Content != "" {
+				b.WriteString(m.Content)
+				b.WriteString("\n")
+			}
+			for _, tc := range m.Tools {
+				args, _ := json.Marshal(tc.Input)
+				fmt.Fprintf(&b, "[tool_call %s name=%s input=%s]\n", tc.ID, tc.Name, args)
+			}
+			b.WriteString("\n")
+		default:
+			fmt.Fprintf(&b, "# %s\n%s\n\n", m.Role, m.Content)
+		}
+		if b.Len() >= cap {
+			break
+		}
+	}
+	out := b.String()
+	if len(out) > cap {
+		out = out[:cap] + "\n[transcript truncated]"
+	}
+	return out
+}
+
+// postIterationWithTranscript is a fork of postIteration that lets
+// runExecutor pass the multi-turn transcript built above. The base
+// postIteration auto-derives a single-turn transcript from resp.Text.
+func (o *Orchestrator) postIterationWithTranscript(ctx context.Context, runID uuid.UUID, phase, role, summary string, resp *agent.Response, transcript string) (*client.Iteration, error) {
 	model := ""
 	prompt, completion := 0, 0
 	if resp != nil {
@@ -506,6 +557,41 @@ func (o *Orchestrator) postIteration(ctx context.Context, runID uuid.UUID, phase
 	it, err := o.Client.PostIteration(ctx, runID, client.PostIterationReq{
 		Phase: phase, AgentRole: role,
 		Provider: o.Provider.Name(), Model: model, Summary: summary,
+		Transcript: transcript,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("post iteration: %w", err)
+	}
+	if prompt > 0 || completion > 0 {
+		_ = o.Client.PatchIteration(ctx, it.ID, client.PatchIterationReq{
+			PromptTokens: &prompt, CompletionTokens: &completion,
+			Status: ptr("done"),
+		})
+	} else {
+		_ = o.Client.PatchIteration(ctx, it.ID, client.PatchIterationReq{
+			Status: ptr("done"),
+		})
+	}
+	return it, nil
+}
+
+func (o *Orchestrator) postIteration(ctx context.Context, runID uuid.UUID, phase, role, summary string, resp *agent.Response) (*client.Iteration, error) {
+	model := ""
+	prompt, completion := 0, 0
+	transcript := ""
+	if resp != nil {
+		model = resp.Model
+		prompt = resp.PromptTokens
+		completion = resp.CompletionTokens
+		// Single-turn transcript: just the model's text. The executor
+		// (which is multi-turn) overrides this with a richer transcript
+		// — see runExecutor's full-conversation capture below.
+		transcript = resp.Text
+	}
+	it, err := o.Client.PostIteration(ctx, runID, client.PostIterationReq{
+		Phase: phase, AgentRole: role,
+		Provider: o.Provider.Name(), Model: model, Summary: summary,
+		Transcript: transcript,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("post iteration: %w", err)
