@@ -21,9 +21,15 @@ func (s *Store) CreatePlan(ctx context.Context, specID uuid.UUID, createdBy *uui
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck
 
+	// See iterations.go for the rationale behind the advisory xact lock —
+	// FOR UPDATE doesn't compose with MAX(); we serialise per-spec so
+	// concurrent CreatePlan calls don't race on version numbering.
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext('plan:' || $1::text))`, specID); err != nil {
+		return nil, err
+	}
 	var nextVersion int
 	if err := tx.QueryRow(ctx, `
-		SELECT COALESCE(MAX(version), 0) + 1 FROM plans WHERE spec_id = $1 FOR UPDATE
+		SELECT COALESCE(MAX(version), 0) + 1 FROM plans WHERE spec_id = $1
 	`, specID).Scan(&nextVersion); err != nil {
 		return nil, err
 	}

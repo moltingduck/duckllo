@@ -1,6 +1,7 @@
 package models
 
 import (
+	"encoding/json"
 	"time"
 
 	"github.com/google/uuid"
@@ -26,20 +27,20 @@ type ReferenceAsset struct {
 }
 
 type Spec struct {
-	ID                 uuid.UUID `json:"id"`
-	ProjectID          uuid.UUID `json:"project_id"`
-	TopologyID         *uuid.UUID `json:"topology_id,omitempty"`
-	Title              string    `json:"title"`
-	Intent             string    `json:"intent"`
-	Priority           string    `json:"priority"`
-	Status             string    `json:"status"`
-	AcceptanceCriteria []byte    `json:"acceptance_criteria"`  // JSONB raw
-	ReferenceAssets    []byte    `json:"reference_assets"`
-	AffectedComponents []byte    `json:"affected_components"`
-	CreatedBy          *uuid.UUID `json:"created_by,omitempty"`
-	AssigneeID         *uuid.UUID `json:"assignee_id,omitempty"`
-	CreatedAt          time.Time `json:"created_at"`
-	UpdatedAt          time.Time `json:"updated_at"`
+	ID                 uuid.UUID       `json:"id"`
+	ProjectID          uuid.UUID       `json:"project_id"`
+	TopologyID         *uuid.UUID      `json:"topology_id,omitempty"`
+	Title              string          `json:"title"`
+	Intent             string          `json:"intent"`
+	Priority           string          `json:"priority"`
+	Status             string          `json:"status"`
+	AcceptanceCriteria json.RawMessage `json:"acceptance_criteria"`
+	ReferenceAssets    json.RawMessage `json:"reference_assets"`
+	AffectedComponents json.RawMessage `json:"affected_components"`
+	CreatedBy          *uuid.UUID      `json:"created_by,omitempty"`
+	AssigneeID         *uuid.UUID      `json:"assignee_id,omitempty"`
+	CreatedAt          time.Time       `json:"created_at"`
+	UpdatedAt          time.Time       `json:"updated_at"`
 }
 
 // PlanStep lives inside plans.steps JSONB.
@@ -54,16 +55,16 @@ type PlanStep struct {
 }
 
 type Plan struct {
-	ID            uuid.UUID  `json:"id"`
-	SpecID        uuid.UUID  `json:"spec_id"`
-	Version       int        `json:"version"`
-	CreatedByRole string     `json:"created_by_role"`
-	Status        string     `json:"status"`
-	Steps         []byte     `json:"steps"`
-	DAG           []byte     `json:"dag"`
-	CreatedBy     *uuid.UUID `json:"created_by,omitempty"`
-	ApprovedBy    *uuid.UUID `json:"approved_by,omitempty"`
-	ApprovedAt    *time.Time `json:"approved_at,omitempty"`
-	CreatedAt     time.Time  `json:"created_at"`
-	UpdatedAt     time.Time  `json:"updated_at"`
+	ID            uuid.UUID       `json:"id"`
+	SpecID        uuid.UUID       `json:"spec_id"`
+	Version       int             `json:"version"`
+	CreatedByRole string          `json:"created_by_role"`
+	Status        string          `json:"status"`
+	Steps         json.RawMessage `json:"steps"`
+	DAG           json.RawMessage `json:"dag"`
+	CreatedBy     *uuid.UUID      `json:"created_by,omitempty"`
+	ApprovedBy    *uuid.UUID      `json:"approved_by,omitempty"`
+	ApprovedAt    *time.Time      `json:"approved_at,omitempty"`
+	CreatedAt     time.Time       `json:"created_at"`
+	UpdatedAt     time.Time       `json:"updated_at"`
 }

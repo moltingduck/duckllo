@@ -116,11 +116,14 @@ async function refresh(mount, pid, sid) {
   }
 }
 
+// JSONB columns now arrive as raw JSON (json.RawMessage on the server) so
+// they passthrough to the client as arrays/objects directly. This shim
+// stays only as a safety net during migrations.
 function readJSON(b) {
-  if (!b) return [];
+  if (b == null) return [];
   if (Array.isArray(b)) return b;
+  if (typeof b === "object") return b;
   if (typeof b === "string") {
-    try { return JSON.parse(atob(b)); } catch (_) {}
     try { return JSON.parse(b); } catch (_) {}
   }
   return [];

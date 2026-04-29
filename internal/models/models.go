@@ -1,8 +1,13 @@
 // Package models contains plain struct definitions that map to database
 // rows. Field tags use db:"name" so pgx scanners can map columns directly.
+//
+// JSONB fields are typed as json.RawMessage so they passthrough as raw
+// JSON in API responses instead of being base64-encoded (which is what
+// json.Marshal does to a []byte).
 package models
 
 import (
+	"encoding/json"
 	"time"
 
 	"github.com/google/uuid"
@@ -26,14 +31,14 @@ type Session struct {
 }
 
 type Project struct {
-	ID          uuid.UUID `json:"id"`
-	Name        string    `json:"name"`
-	Description string    `json:"description"`
-	OwnerID     uuid.UUID `json:"owner_id"`
-	GitRepoURL  string    `json:"git_repo_url"`
-	Settings    []byte    `json:"settings"`
-	CreatedAt   time.Time `json:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at"`
+	ID          uuid.UUID       `json:"id"`
+	Name        string          `json:"name"`
+	Description string          `json:"description"`
+	OwnerID     uuid.UUID       `json:"owner_id"`
+	GitRepoURL  string          `json:"git_repo_url"`
+	Settings    json.RawMessage `json:"settings"`
+	CreatedAt   time.Time       `json:"created_at"`
+	UpdatedAt   time.Time       `json:"updated_at"`
 }
 
 type ProjectMember struct {
@@ -48,12 +53,12 @@ type ProjectMember struct {
 }
 
 type APIKey struct {
-	ID          uuid.UUID  `json:"id"`
-	KeyPrefix   string     `json:"key_prefix"`
-	Label       string     `json:"label"`
-	UserID      uuid.UUID  `json:"user_id"`
-	ProjectID   uuid.UUID  `json:"project_id"`
-	Permissions []byte     `json:"permissions"`
-	LastUsedAt  *time.Time `json:"last_used_at,omitempty"`
-	CreatedAt   time.Time  `json:"created_at"`
+	ID          uuid.UUID       `json:"id"`
+	KeyPrefix   string          `json:"key_prefix"`
+	Label       string          `json:"label"`
+	UserID      uuid.UUID       `json:"user_id"`
+	ProjectID   uuid.UUID       `json:"project_id"`
+	Permissions json.RawMessage `json:"permissions"`
+	LastUsedAt  *time.Time      `json:"last_used_at,omitempty"`
+	CreatedAt   time.Time       `json:"created_at"`
 }

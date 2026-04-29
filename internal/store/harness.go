@@ -2,20 +2,21 @@ package store
 
 import (
 	"context"
+	"encoding/json"
 	"time"
 
 	"github.com/google/uuid"
 )
 
 type Topology struct {
-	ID             uuid.UUID `json:"id"`
-	ProjectID      uuid.UUID `json:"project_id"`
-	Name           string    `json:"name"`
-	Description    string    `json:"description"`
-	DefaultGuides  []byte    `json:"default_guides"`
-	DefaultSensors []byte    `json:"default_sensors"`
-	CreatedAt      time.Time `json:"created_at"`
-	UpdatedAt      time.Time `json:"updated_at"`
+	ID             uuid.UUID       `json:"id"`
+	ProjectID      uuid.UUID       `json:"project_id"`
+	Name           string          `json:"name"`
+	Description    string          `json:"description"`
+	DefaultGuides  json.RawMessage `json:"default_guides"`
+	DefaultSensors json.RawMessage `json:"default_sensors"`
+	CreatedAt      time.Time       `json:"created_at"`
+	UpdatedAt      time.Time       `json:"updated_at"`
 }
 
 type HarnessRule struct {

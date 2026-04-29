@@ -17,9 +17,18 @@ func (s *Store) AppendIteration(ctx context.Context, runID uuid.UUID, phase, rol
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck
 
+	// Take an advisory transaction lock keyed off the run id so concurrent
+	// AppendIteration calls for the same run serialise. We can't put
+	// FOR UPDATE on an aggregate query, but pg_advisory_xact_lock
+	// achieves the same goal cleanly. In practice the work_queue claim
+	// ensures one runner at a time per run, but defending against
+	// pathological clients is cheap.
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext('iter:' || $1::text))`, runID); err != nil {
+		return nil, err
+	}
 	var nextIdx int
 	if err := tx.QueryRow(ctx, `
-		SELECT COALESCE(MAX(idx), -1) + 1 FROM iterations WHERE run_id = $1 FOR UPDATE
+		SELECT COALESCE(MAX(idx), -1) + 1 FROM iterations WHERE run_id = $1
 	`, runID).Scan(&nextIdx); err != nil {
 		return nil, err
 	}

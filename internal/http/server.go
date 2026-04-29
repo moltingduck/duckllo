@@ -38,6 +38,10 @@ func NewServer(cfg *config.Config, pool *pgxpool.Pool) *Server {
 	}
 }
 
+// Handler returns the assembled chi handler. Exposed for tests that want
+// to plug the routes into httptest without spinning a real listener.
+func (s *Server) Handler() http.Handler { return s.routes() }
+
 func (s *Server) Run(ctx context.Context) error {
 	srv := &http.Server{
 		Addr:              s.cfg.Addr,
