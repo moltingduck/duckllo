@@ -187,9 +187,9 @@ func (d *DockerExecutor) provisionTailscale(ctx context.Context) error {
 
 // lookupGenericByName is the same shape as lookupByName but takes the name
 // instead of using the executor's primary container's name. Used for the
-// tailscale sidecar.
+// tailscale sidecar. Same --no-trunc reason as lookupByName.
 func (d *DockerExecutor) lookupGenericByName(ctx context.Context, name string) (string, error) {
-	out, err := d.docker(ctx, "ps", "-a", "--filter", "name=^/"+name+"$", "--format", "{{.ID}}")
+	out, err := d.docker(ctx, "ps", "-a", "--no-trunc", "--filter", "name=^/"+name+"$", "--format", "{{.ID}}")
 	if err != nil {
 		return "", err
 	}
@@ -197,8 +197,11 @@ func (d *DockerExecutor) lookupGenericByName(ctx context.Context, name string) (
 }
 
 // lookupByName returns "" if no container with the given name exists.
+// --no-trunc is required so the returned ID matches what `docker run -d`
+// gives us — without it docker ps emits the 12-char short ID and the
+// adopt path stores a different value than fresh provision did.
 func (d *DockerExecutor) lookupByName(ctx context.Context) (string, error) {
-	out, err := d.docker(ctx, "ps", "-a", "--filter", "name=^/"+d.ContainerName+"$", "--format", "{{.ID}}")
+	out, err := d.docker(ctx, "ps", "-a", "--no-trunc", "--filter", "name=^/"+d.ContainerName+"$", "--format", "{{.ID}}")
 	if err != nil {
 		return "", err
 	}
