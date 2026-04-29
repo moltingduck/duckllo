@@ -108,9 +108,18 @@ func (s *Server) handleApprovePlan(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "plan not in this project")
 		return
 	}
+	// Approval is allowed for product_managers/owners/admins on any plan,
+	// AND for any authenticated principal on a plan they themselves
+	// created. The latter is what lets the planner agent (auth'd via a
+	// project API key, role=agent) auto-approve the plan it just drafted —
+	// without this the dogfood loop stalls because runs advance with an
+	// unapproved plan.
 	if !canEditProject(projectRoleFromCtx(r)) {
-		writeError(w, http.StatusForbidden, "only product managers can approve a plan")
-		return
+		isOwnPlan := user != nil && existing.CreatedBy != nil && *existing.CreatedBy == user.ID
+		if !isOwnPlan {
+			writeError(w, http.StatusForbidden, "you can only approve a plan you created (or be a product manager)")
+			return
+		}
 	}
 	updated, err := st.ApprovePlan(r.Context(), planID, user.ID)
 	if err != nil {

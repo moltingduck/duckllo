@@ -36,8 +36,15 @@ func NewClaudeCode(binary, model, cwd string) *ClaudeCode {
 		binary = "claude"
 	}
 	return &ClaudeCode{
-		Binary: binary, Args: []string{"-p"},
-		Model: model, Cwd: cwd,
+		Binary: binary,
+		// -p              non-interactive print mode
+		// --permission-mode acceptEdits  so the agent can actually edit
+		//                 files in the workspace without prompting; without
+		//                 this Claude Code in -p mode describes the change
+		//                 instead of making it.
+		Args:    []string{"-p", "--permission-mode", "acceptEdits"},
+		Model:   model,
+		Cwd:     cwd,
 		Timeout: 30 * time.Minute,
 	}
 }
