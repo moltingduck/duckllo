@@ -26,6 +26,7 @@ func DefaultRegistry() *Registry {
 	// as either kind at the spec level — the runtime behaviour is
 	// identical.
 	r.Set("visual_diff", NewScreenshotSensor())
+	r.Set("gif", NewGIFSensor())
 	// 'judge' and 'manual' are intentionally absent — orchestrator handles
 	// the inferential judge directly, and 'manual' criteria are skipped
 	// (the human is the sensor).
