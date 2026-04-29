@@ -12,16 +12,18 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/moltingduck/duckllo/internal/config"
+	"github.com/moltingduck/duckllo/internal/runner/agent"
 	"github.com/moltingduck/duckllo/internal/uploads"
 	"github.com/moltingduck/duckllo/internal/webui"
 )
 
 type Server struct {
-	cfg     *config.Config
-	pool    *pgxpool.Pool
-	uploads *uploads.Store
-	events  *EventBus
-	webFS   fs.FS
+	cfg      *config.Config
+	pool     *pgxpool.Pool
+	uploads  *uploads.Store
+	events   *EventBus
+	webFS    fs.FS
+	provider agent.Provider // nil if no API key configured; suggest endpoint 503s
 }
 
 func NewServer(cfg *config.Config, pool *pgxpool.Pool) *Server {
@@ -29,12 +31,20 @@ func NewServer(cfg *config.Config, pool *pgxpool.Pool) *Server {
 	if err != nil {
 		panic("uploads init: " + err.Error())
 	}
+	// Optional LLM provider for the spec composer's "Suggest criteria"
+	// affordance. Only Anthropic is wired up here; if no key is set the
+	// suggest endpoint returns 503 with a clear message instead of 500.
+	var p agent.Provider
+	if cfg.AnthropicAPIKey != "" {
+		p = agent.NewAnthropic(cfg.AnthropicAPIKey, "")
+	}
 	return &Server{
-		cfg:     cfg,
-		pool:    pool,
-		uploads: up,
-		events:  NewEventBus(),
-		webFS:   webui.Assets(),
+		cfg:      cfg,
+		pool:     pool,
+		uploads:  up,
+		events:   NewEventBus(),
+		webFS:    webui.Assets(),
+		provider: p,
 	}
 }
 

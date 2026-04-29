@@ -57,6 +57,7 @@ func (s *Server) routes() http.Handler {
 			// Specs.
 			r.Get("/specs", s.handleListSpecs)
 			r.Post("/specs", s.handleCreateSpec)
+			r.Post("/specs/suggest", s.handleSuggestCriteria)
 			r.Route("/specs/{specID}", func(r chi.Router) {
 				r.Get("/", s.handleGetSpec)
 				r.Patch("/", s.handlePatchSpec)

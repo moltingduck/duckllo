@@ -10,7 +10,41 @@ import (
 
 	"github.com/moltingduck/duckllo/internal/models"
 	"github.com/moltingduck/duckllo/internal/store"
+	"github.com/moltingduck/duckllo/internal/suggest"
 )
+
+type suggestCriteriaReq struct {
+	Title  string `json:"title"`
+	Intent string `json:"intent"`
+}
+
+// handleSuggestCriteria asks the configured LLM provider to propose
+// 3–6 acceptance criteria based on title + intent. Pure UX affordance —
+// the user accepts/edits the suggestions in the composer; nothing is
+// persisted by this endpoint. Returns 503 if no provider is wired (no
+// ANTHROPIC_API_KEY) so the UI can hide the button instead of erroring.
+func (s *Server) handleSuggestCriteria(w http.ResponseWriter, r *http.Request) {
+	if s.provider == nil {
+		writeError(w, http.StatusServiceUnavailable,
+			"no LLM provider configured on the server (set ANTHROPIC_API_KEY)")
+		return
+	}
+	var req suggestCriteriaReq
+	if err := decodeJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if strings.TrimSpace(req.Title) == "" {
+		writeError(w, http.StatusBadRequest, "title required")
+		return
+	}
+	out, err := suggest.Criteria(r.Context(), s.provider, req.Title, req.Intent)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"criteria": out})
+}
 
 type createSpecReq struct {
 	Title      string `json:"title"`

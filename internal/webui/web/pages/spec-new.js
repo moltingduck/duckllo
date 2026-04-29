@@ -49,6 +49,41 @@ export async function render(mount, params) {
     renderCriteria();
   });
 
+  // Suggest button: asks the LLM provider to propose 3-6 criteria from
+  // title+intent. Returns 503 (handled below) when the server has no
+  // ANTHROPIC_API_KEY configured — surface a clear toast in that case.
+  const suggestBtn = el("button", { class: "secondary" }, "Suggest from title + intent");
+  suggestBtn.addEventListener("click", async () => {
+    const title = titleInput.value.trim();
+    const intent = intentInput.value.trim();
+    if (!title) return toast("Type a title first", "error");
+    suggestBtn.disabled = true;
+    suggestBtn.textContent = "Asking the model…";
+    try {
+      const resp = await api(`/api/projects/${params.pid}/specs/suggest`, {
+        method: "POST", body: { title, intent } });
+      const added = (resp.criteria || []).filter((s) => s.text && s.sensor_kind);
+      if (added.length === 0) {
+        toast("Model returned nothing usable", "error");
+        return;
+      }
+      for (const s of added) {
+        criteria.push({ id: crypto.randomUUID(), text: s.text, sensor_kind: s.sensor_kind });
+      }
+      renderCriteria();
+      toast(`Added ${added.length} suggestion${added.length === 1 ? "" : "s"} — review and edit`);
+    } catch (err) {
+      if (err.status === 503) {
+        toast("No LLM provider on the server (set ANTHROPIC_API_KEY)", "error");
+      } else {
+        toast(err.message, "error");
+      }
+    } finally {
+      suggestBtn.disabled = false;
+      suggestBtn.textContent = "Suggest from title + intent";
+    }
+  });
+
   const submit = el("button", {}, "Create");
   submit.addEventListener("click", async () => {
     if (!titleInput.value.trim()) return toast("Title required", "error");
@@ -75,6 +110,7 @@ export async function render(mount, params) {
     el("label", {}, "Intent"), intentInput,
     el("label", {}, "Priority"), priorityInput,
     el("h2", { style: "margin-top:18px" }, "Acceptance criteria"),
+    el("div", { class: "row", style: "gap:8px;margin-bottom:6px" }, [suggestBtn]),
     criteriaList,
     el("div", { class: "row", style: "gap:8px;margin-top:8px" }, [newCritKind, newCritText, addCrit]),
     el("div", { class: "row", style: "gap:8px;margin-top:18px" }, [submit, cancel]),
