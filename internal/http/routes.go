@@ -3,6 +3,7 @@ package http
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
@@ -105,6 +106,21 @@ func (s *Server) routes() http.Handler {
 			r.Post("/work/claim", s.handleClaimWork)
 		})
 	})
+
+	// Static Web UI: catch-all for everything not under /api. Registered
+	// last so all API routes take precedence in chi's trie. Unknown /api
+	// paths fall here too — we 404 them explicitly so the UI's index.html
+	// isn't returned for an API typo.
+	fileSrv := http.FileServer(http.FS(s.webFS))
+	uiHandler := http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		if strings.HasPrefix(req.URL.Path, "/api/") {
+			writeError(w, http.StatusNotFound, "no such api route")
+			return
+		}
+		fileSrv.ServeHTTP(w, req)
+	})
+	r.Handle("/", uiHandler)
+	r.Handle("/*", uiHandler)
 
 	return r
 }

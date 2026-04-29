@@ -7,10 +7,13 @@ import (
 	"net/http"
 	"time"
 
+	"io/fs"
+
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/moltingduck/duckllo/internal/config"
 	"github.com/moltingduck/duckllo/internal/uploads"
+	"github.com/moltingduck/duckllo/internal/webui"
 )
 
 type Server struct {
@@ -18,6 +21,7 @@ type Server struct {
 	pool    *pgxpool.Pool
 	uploads *uploads.Store
 	events  *EventBus
+	webFS   fs.FS
 }
 
 func NewServer(cfg *config.Config, pool *pgxpool.Pool) *Server {
@@ -30,6 +34,7 @@ func NewServer(cfg *config.Config, pool *pgxpool.Pool) *Server {
 		pool:    pool,
 		uploads: up,
 		events:  NewEventBus(),
+		webFS:   webui.Assets(),
 	}
 }
 
