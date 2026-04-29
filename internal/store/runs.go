@@ -98,9 +98,9 @@ func (s *Store) ClaimWork(ctx context.Context, runnerID string, phases []string)
 	err = tx.QueryRow(ctx, `
 		WITH next AS (
 			SELECT id FROM work_queue
-			WHERE status = 'pending'
-			   OR (status = 'claimed' AND lock_expires_at < NOW())
-			AND ($2::text[] IS NULL OR phase = ANY($2::text[]))
+			WHERE (status = 'pending'
+			       OR (status = 'claimed' AND lock_expires_at < NOW()))
+			  AND ($2::text[] IS NULL OR phase = ANY($2::text[]))
 			ORDER BY updated_at
 			FOR UPDATE SKIP LOCKED
 			LIMIT 1

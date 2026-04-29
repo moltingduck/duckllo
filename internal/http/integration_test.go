@@ -930,6 +930,56 @@ func TestPlanApproval_AgentCanApproveOwnPlan(t *testing.T) {
 		nil, nil, http.StatusOK)
 }
 
+// TestClaimWork_RespectsPhaseFilterForPendingItems locks in the SQL
+// precedence fix on ClaimWork. The original WHERE clause was
+//
+//	status = 'pending'
+//	   OR (status = 'claimed' AND lock_expires_at < NOW())
+//	  AND ($2::text[] IS NULL OR phase = ANY($2::text[]))
+//
+// SQL binds AND tighter than OR, so the phase filter only constrained
+// the stale-claimed branch — a runner asking for phases=['execute']
+// could (and would, deterministically) snatch a pending phase='plan'
+// item, which then made the whole protocol go sideways (planner code
+// runs against an executor's claim). This test creates a fresh run
+// (which seeds a 'plan' pending row), then asks for phases=['execute']
+// and asserts 204 No Content. Without the fix the claim returns 200
+// with a phase='plan' item.
+func TestClaimWork_RespectsPhaseFilterForPendingItems(t *testing.T) {
+	e := setupTestEnv(t)
+
+	var spec map[string]any
+	e.c.do("POST", "/api/projects/"+e.pid+"/specs", e.c.token,
+		map[string]any{"title": "phase filter", "intent": "x"}, &spec, http.StatusCreated)
+	sid := spec["id"].(string)
+	e.c.do("POST", "/api/projects/"+e.pid+"/specs/"+sid+"/criteria", e.c.token,
+		map[string]any{"text": "ok", "sensor_kind": "judge"}, nil, http.StatusOK)
+	e.c.do("POST", "/api/projects/"+e.pid+"/specs/"+sid+"/approve", e.c.token, nil, nil, http.StatusOK)
+	e.c.do("POST", "/api/projects/"+e.pid+"/specs/"+sid+"/runs", e.c.token,
+		map[string]any{}, nil, http.StatusCreated)
+
+	// A runner that only wants 'execute' phases must NOT claim the
+	// pending 'plan' row this run created.
+	res := e.c.raw("POST", "/api/projects/"+e.pid+"/work/claim", e.apiKey,
+		map[string]any{"runner_id": "executor-only", "phases": []string{"execute"}})
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusNoContent {
+		body, _ := io.ReadAll(res.Body)
+		t.Fatalf("execute-only claim should be 204; got %d: %s", res.StatusCode, body)
+	}
+
+	// And conversely: a planner-scoped claim DOES pick it up.
+	var claim struct {
+		WorkItem map[string]any `json:"work_item"`
+	}
+	e.c.do("POST", "/api/projects/"+e.pid+"/work/claim", e.apiKey,
+		map[string]any{"runner_id": "planner-only", "phases": []string{"plan"}},
+		&claim, http.StatusOK)
+	if claim.WorkItem["phase"] != "plan" {
+		t.Errorf("planner claim picked %v, want plan", claim.WorkItem["phase"])
+	}
+}
+
 // TestAbortRun_CleansUpWorkQueueAndSpec locks in the fix where AbortRun
 // only flipped run.status='aborted' and left two states inconsistent:
 // (1) any pending/claimed work_queue rows for the run sat there forever,
