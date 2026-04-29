@@ -215,6 +215,14 @@ func (s *mcpServer) dispatchTool(ctx context.Context, name string, args map[stri
 		}
 		var out any
 		return out, s.rawPost(ctx, "/api/projects/"+s.client.ProjectID.String()+"/verifications/"+vid+"/annotations", body, &out)
+	case "duckllo_complete_run":
+		rid := getStr(args, "run_id")
+		var out any
+		return out, s.rawPost(ctx, "/api/projects/"+s.client.ProjectID.String()+"/runs/"+rid+"/complete", map[string]any{}, &out)
+	case "duckllo_abort_run":
+		rid := getStr(args, "run_id")
+		var out any
+		return out, s.rawPost(ctx, "/api/projects/"+s.client.ProjectID.String()+"/runs/"+rid+"/abort", map[string]any{}, &out)
 	}
 	return nil, fmt.Errorf("unknown tool %q", name)
 }
@@ -284,6 +292,20 @@ func toolDefs() []map[string]any {
 				"body":            str("comment text"),
 				"verdict":         str("fix_required|nit|acceptable"),
 			}, []string{"verification_id", "bbox", "body", "verdict"}),
+		},
+		{
+			"name":        "duckllo_complete_run",
+			"description": "Force-mark a run done. Use when the validator parked a run in 'validating'/'correcting' awaiting human review and you've decided the criteria are good enough. Sets run status=done and spec status=validated.",
+			"inputSchema": objSchema(map[string]any{
+				"run_id": str("uuid of the run"),
+			}, []string{"run_id"}),
+		},
+		{
+			"name":        "duckllo_abort_run",
+			"description": "Abort an in-flight run. Use to stop a runaway loop or a run you no longer want.",
+			"inputSchema": objSchema(map[string]any{
+				"run_id": str("uuid of the run"),
+			}, []string{"run_id"}),
 		},
 	}
 }
