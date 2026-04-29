@@ -51,6 +51,23 @@ func (o *Orchestrator) Run(ctx context.Context, work *client.WorkItem, run *clie
 		return fmt.Errorf("bundle: %w", err)
 	}
 
+	// Hard cap on iterations so a runaway correction loop can't burn
+	// budget forever. The schema stores turn_budget on the run; when
+	// turns_used has reached it, fail the run loudly with a clear
+	// summary so the operator sees why it stopped. Without this a spec
+	// whose criteria the agent can't satisfy keeps cycling
+	// execute → validate → correct → execute … indefinitely.
+	if bundle.Run.TurnBudget > 0 && bundle.Run.TurnsUsed >= bundle.Run.TurnBudget {
+		log.Printf("turn budget exceeded: turns_used=%d budget=%d — failing run",
+			bundle.Run.TurnsUsed, bundle.Run.TurnBudget)
+		summary := fmt.Sprintf("turn budget exceeded: %d / %d turns used",
+			bundle.Run.TurnsUsed, bundle.Run.TurnBudget)
+		_, _ = o.postIteration(ctx, work.RunID, work.Phase, "system", summary, nil)
+		return o.Client.Advance(ctx, work.RunID, client.AdvanceRequest{
+			RunnerID: o.RunnerID, FromPhase: work.Phase, FinalStatus: "failed",
+		})
+	}
+
 	exec, devURL, teardown, err := o.openWorkspace(ctx, run)
 	if err != nil {
 		return fmt.Errorf("workspace: %w", err)
