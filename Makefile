@@ -1,16 +1,19 @@
-.PHONY: help setup db serve runner build test vet fmt clean
+.PHONY: help setup db serve runner selfhost build test vet fmt clean
 
 help:
 	@echo "duckllo development targets"
 	@echo ""
-	@echo "  make setup    copy .duckllo.env.example to .duckllo.env (one-time)"
-	@echo "  make db       bring up Postgres in the background"
-	@echo "  make serve    run the duckllo server (server reads .duckllo.env)"
-	@echo "  make runner   run the harness runner against the server"
-	@echo "  make build    compile both binaries to ./bin/"
-	@echo "  make test     run the integration test (requires Postgres at localhost:5432)"
-	@echo "  make vet      go vet ./..."
-	@echo "  make fmt      gofmt -w ."
+	@echo "  make setup     copy .duckllo.env.example to .duckllo.env (one-time)"
+	@echo "  make db        bring up Postgres in the background"
+	@echo "  make serve     run the duckllo server (server reads .duckllo.env)"
+	@echo "  make selfhost  bootstrap duckllo developing duckllo:"
+	@echo "                 mint a project API key, seed harness rules,"
+	@echo "                 write .duckllo.env. Idempotent."
+	@echo "  make runner    run the harness runner against the server"
+	@echo "  make build     compile all binaries to ./bin/"
+	@echo "  make test      run the integration test (requires Postgres at localhost:5432)"
+	@echo "  make vet       go vet ./..."
+	@echo "  make fmt       gofmt -w ."
 
 setup:
 	@if [ -e .duckllo.env ]; then \
@@ -24,6 +27,9 @@ db:
 
 serve:
 	go run ./cmd/duckllo serve
+
+selfhost:
+	go run ./cmd/duckllo selfhost
 
 runner:
 	go run ./cmd/runner

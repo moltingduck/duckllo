@@ -17,6 +17,29 @@ The agent is the model; the harness is everything around it. duckllo is the harn
 
 Phase 1 ships the schema, Web UI, runner, sensors, and visual annotator. Phase 2 layers per-spec Docker isolation and a Tailscale sidecar so the dev server is reachable on the tailnet for visual validation without poking holes in the host.
 
+## Using duckllo on duckllo (dogfood)
+
+```bash
+make db                                            # Postgres in the background
+DUCKLLO_GIN_PASSWORD=changeme make selfhost        # ensure gin, mint a project key,
+                                                   # seed harness rules, write .duckllo.env
+make serve                                         # http://localhost:3000
+make runner                                        # in another shell, after editing
+                                                   # .duckllo.env to add ANTHROPIC_API_KEY
+```
+
+`make selfhost` is idempotent. The first run mints a project API key and
+writes `.duckllo.env` with `DUCKLLO_URL`/`DUCKLLO_PROJECT`/`DUCKLLO_KEY`
+already filled in; you only need to add `ANTHROPIC_API_KEY`. Re-running
+preserves the project, the rules, and the existing key — the plaintext is
+shown only once at mint time.
+
+The seed harness rules codify CLAUDE.md's non-negotiables (gin steward,
+Go-only backend, JSONB → json.RawMessage, FOR UPDATE caveats, no emojis,
+commit etiquette, …) so any agent the runner spawns to develop duckllo
+itself sees them in every iteration's prompt. Edit them in the steering
+loop UI; the Go-side list lives in `internal/selfhost/rules.go`.
+
 ## Quick start
 
 ```bash

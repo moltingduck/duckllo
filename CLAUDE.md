@@ -126,6 +126,23 @@ RID=$(curl -s -X POST http://localhost:3000/api/projects/$PID/specs/$SID/runs \
 curl -N "http://localhost:3000/api/projects/$PID/events?token=$KEY"
 ```
 
+## Self-hosting
+
+`duckllo selfhost` (or `make selfhost`) bootstraps the dogfood loop:
+ensures the `gin` steward, ensures a project named `duckllo`, mints an
+API key labeled `selfhost-runner`, seeds the project's harness rules
+from the codified list in `internal/selfhost/rules.go`, and writes
+`.duckllo.env` with `DUCKLLO_URL`/`DUCKLLO_PROJECT`/`DUCKLLO_KEY`
+pre-filled. Idempotent on re-run — only the freshly-minted key
+triggers an env-file write because the plaintext is unrecoverable
+afterwards.
+
+When CLAUDE.md's rules change, mirror the change in
+`internal/selfhost/rules.go` and re-run `selfhost`. New rules are
+appended; existing rules with the same name are left in place so
+operators can edit them in the UI without selfhost overwriting their
+work.
+
 ## Lessons Learned
 
 Patterns discovered during development. Update this section as new ones emerge.
