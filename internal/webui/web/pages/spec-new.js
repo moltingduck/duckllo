@@ -4,6 +4,21 @@ import { toast } from "/toast.js";
 
 const SENSOR_KINDS = ["lint", "unit_test", "e2e_test", "build", "screenshot", "judge", "manual"];
 
+// crypto.randomUUID() is only defined in secure contexts (HTTPS or
+// localhost). When duckllo is served over plain HTTP on a tailnet
+// hostname it isn't, so we need a fallback. The id is purely a
+// client-side handle for the criteria list — the server assigns the
+// canonical id when the spec is persisted, so any unique string works.
+function genID() {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  // Timestamp + 8 hex chars of randomness. Good enough as a list key;
+  // not used for anything that needs cryptographic strength.
+  const r = Math.random().toString(16).slice(2, 10);
+  return Date.now().toString(16) + "-" + r;
+}
+
 export async function render(mount, params) {
   mount.innerHTML = "";
   mount.appendChild(el("h1", {}, "New spec"));
@@ -44,7 +59,7 @@ export async function render(mount, params) {
   addCrit.addEventListener("click", () => {
     const text = newCritText.value.trim();
     if (!text) return toast("Text required", "error");
-    criteria.push({ id: crypto.randomUUID(), text, sensor_kind: newCritKind.value });
+    criteria.push({ id: genID(), text, sensor_kind: newCritKind.value });
     newCritText.value = "";
     renderCriteria();
   });
@@ -68,7 +83,7 @@ export async function render(mount, params) {
         return;
       }
       for (const s of added) {
-        criteria.push({ id: crypto.randomUUID(), text: s.text, sensor_kind: s.sensor_kind });
+        criteria.push({ id: genID(), text: s.text, sensor_kind: s.sensor_kind });
       }
       renderCriteria();
       toast(`Added ${added.length} suggestion${added.length === 1 ? "" : "s"} — review and edit`);
