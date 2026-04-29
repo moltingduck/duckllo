@@ -23,6 +23,19 @@ type Config struct {
 	// presence at startup so misconfiguration surfaces immediately.
 	AnthropicAPIKey string
 
+	// Provider for the spec composer's suggest affordance. One of:
+	//   "anthropic"   — calls the API; needs AnthropicAPIKey
+	//   "claude-code" — shells out to the local `claude` CLI; works
+	//                   without an API key (the CLI handles auth)
+	//   "" (auto)     — claude-code if `claude` is on PATH, else
+	//                   anthropic if AnthropicAPIKey is set, else off
+	SuggestProvider string
+
+	// Optional overrides when SuggestProvider is "claude-code". Default
+	// binary is just "claude" (looked up on PATH).
+	ClaudeBinary string
+	ClaudeCwd    string
+
 	// Tailscale preauth key (Phase 2). Loaded but unused in Phase 1.
 	TailscalePreauthKey string
 
@@ -39,6 +52,9 @@ func Load() (*Config, error) {
 		DatabaseURL:         env("DATABASE_URL", "postgres://duckllo:duckllo@localhost:5432/duckllo?sslmode=disable"),
 		UploadsDir:          env("DUCKLLO_UPLOADS", "uploads"),
 		AnthropicAPIKey:     os.Getenv("ANTHROPIC_API_KEY"),
+		SuggestProvider:     env("DUCKLLO_SUGGEST_PROVIDER", ""),
+		ClaudeBinary:        env("DUCKLLO_CLAUDE_BINARY", ""),
+		ClaudeCwd:           env("DUCKLLO_CLAUDE_CWD", ""),
 		TailscalePreauthKey: os.Getenv("TAILSCALE_PREAUTH_KEY"),
 		ContainerRuntime:    env("CONTAINER_RUNTIME", "docker"),
 	}

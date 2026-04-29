@@ -4,7 +4,9 @@ package http
 import (
 	"context"
 	"errors"
+	"log"
 	"net/http"
+	"os/exec"
 	"time"
 
 	"io/fs"
@@ -31,13 +33,7 @@ func NewServer(cfg *config.Config, pool *pgxpool.Pool) *Server {
 	if err != nil {
 		panic("uploads init: " + err.Error())
 	}
-	// Optional LLM provider for the spec composer's "Suggest criteria"
-	// affordance. Only Anthropic is wired up here; if no key is set the
-	// suggest endpoint returns 503 with a clear message instead of 500.
-	var p agent.Provider
-	if cfg.AnthropicAPIKey != "" {
-		p = agent.NewAnthropic(cfg.AnthropicAPIKey, "")
-	}
+	p := selectSuggestProvider(cfg)
 	return &Server{
 		cfg:      cfg,
 		pool:     pool,
@@ -51,6 +47,72 @@ func NewServer(cfg *config.Config, pool *pgxpool.Pool) *Server {
 // Handler returns the assembled chi handler. Exposed for tests that want
 // to plug the routes into httptest without spinning a real listener.
 func (s *Server) Handler() http.Handler { return s.routes() }
+
+// selectSuggestProvider picks the agent.Provider for the spec composer's
+// suggest affordance. Honoured in this order:
+//
+//  1. cfg.SuggestProvider when explicitly set (anthropic | claude-code).
+//  2. claude-code if the `claude` CLI (or a custom path in
+//     cfg.ClaudeBinary) is on PATH — pipe stdin → stdout, no API key
+//     needed because the CLI handles auth on the local host.
+//  3. anthropic if cfg.AnthropicAPIKey is set.
+//  4. nil — suggest endpoint returns 503 with a clear message.
+//
+// Choice (2) is the right default for a developer running duckllo on
+// the same machine as Claude Code: harness the existing local CLI
+// instead of another API key.
+func selectSuggestProvider(cfg *config.Config) agent.Provider {
+	switch cfg.SuggestProvider {
+	case "anthropic":
+		if cfg.AnthropicAPIKey == "" {
+			log.Printf("suggest: DUCKLLO_SUGGEST_PROVIDER=anthropic but ANTHROPIC_API_KEY is empty — suggest will 503")
+			return nil
+		}
+		return agent.NewAnthropic(cfg.AnthropicAPIKey, "")
+	case "claude-code":
+		bin := cfg.ClaudeBinary
+		if bin == "" {
+			bin = "claude"
+		}
+		if _, err := exec.LookPath(bin); err != nil {
+			log.Printf("suggest: DUCKLLO_SUGGEST_PROVIDER=claude-code but %q not on PATH — suggest will 503", bin)
+			return nil
+		}
+		log.Printf("suggest: provider=claude-code binary=%s", bin)
+		return newSuggestClaudeCode(bin, cfg.ClaudeCwd)
+	case "":
+		// auto-detect.
+	default:
+		log.Printf("suggest: unknown DUCKLLO_SUGGEST_PROVIDER=%q (want anthropic|claude-code) — suggest will 503", cfg.SuggestProvider)
+		return nil
+	}
+
+	bin := cfg.ClaudeBinary
+	if bin == "" {
+		bin = "claude"
+	}
+	if _, err := exec.LookPath(bin); err == nil {
+		log.Printf("suggest: provider=claude-code (auto-detected %q on PATH)", bin)
+		return newSuggestClaudeCode(bin, cfg.ClaudeCwd)
+	}
+	if cfg.AnthropicAPIKey != "" {
+		log.Printf("suggest: provider=anthropic (no claude CLI on PATH)")
+		return agent.NewAnthropic(cfg.AnthropicAPIKey, "")
+	}
+	log.Printf("suggest: no provider available — set ANTHROPIC_API_KEY or install the claude CLI")
+	return nil
+}
+
+// newSuggestClaudeCode constructs a Claude Code provider tuned for the
+// suggest endpoint: a tighter timeout because the user is waiting on
+// the button. The 30-minute default in NewClaudeCode is sized for the
+// runner's executor phase (which can do real work); for proposing six
+// criteria, anything past a minute is almost certainly wedged.
+func newSuggestClaudeCode(bin, cwd string) *agent.ClaudeCode {
+	cc := agent.NewClaudeCode(bin, "", cwd)
+	cc.Timeout = 90 * time.Second
+	return cc
+}
 
 func (s *Server) Run(ctx context.Context) error {
 	srv := &http.Server{
