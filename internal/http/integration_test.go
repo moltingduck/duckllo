@@ -744,6 +744,72 @@ func (e *testEnv) runRunnerThroughValidate(t *testing.T, specID string) (runID, 
 	return rid, claim.WorkItem["phase"].(string)
 }
 
+// TestIterationTranscriptRoundTrip locks in the column added in
+// migration 007. Posting an iteration with a `transcript` field and
+// then GETting the run's iterations must surface the same text back.
+// Without this guard a future schema change could silently drop
+// transcripts and our dogfood debuggability story would regress.
+func TestIterationTranscriptRoundTrip(t *testing.T) {
+	e := setupTestEnv(t)
+
+	// Spec + run setup boilerplate.
+	var spec map[string]any
+	e.c.do("POST", "/api/projects/"+e.pid+"/specs", e.c.token,
+		map[string]any{"title": "transcript test", "intent": "x"}, &spec, http.StatusCreated)
+	sid := spec["id"].(string)
+	e.c.do("POST", "/api/projects/"+e.pid+"/specs/"+sid+"/criteria", e.c.token,
+		map[string]any{"text": "ok", "sensor_kind": "judge"}, nil, http.StatusOK)
+	e.c.do("POST", "/api/projects/"+e.pid+"/specs/"+sid+"/approve", e.c.token, nil, nil, http.StatusOK)
+
+	var run map[string]any
+	e.c.do("POST", "/api/projects/"+e.pid+"/specs/"+sid+"/runs", e.c.token,
+		map[string]any{}, &run, http.StatusCreated)
+	rid := run["id"].(string)
+
+	// Claim plan phase so the runner has the lock.
+	var claim struct{ WorkItem map[string]any `json:"work_item"` }
+	e.c.do("POST", "/api/projects/"+e.pid+"/work/claim", e.apiKey,
+		map[string]any{"runner_id": e.runnerID, "phases": []string{"plan"}},
+		&claim, http.StatusOK)
+
+	transcript := "# System\nyou are tested\n\n# user\nplan it\n\n# assistant\n```json\n{\"steps\":[]}\n```"
+	var iter map[string]any
+	e.c.do("POST", "/api/projects/"+e.pid+"/runs/"+rid+"/iterations", e.apiKey,
+		map[string]any{
+			"phase": "plan", "agent_role": "planner",
+			"summary":    "drafted a plan",
+			"transcript": transcript,
+		}, &iter, http.StatusCreated)
+
+	// Re-read via GET /runs and confirm the transcript came back verbatim.
+	var fresh map[string]any
+	e.c.do("GET", "/api/projects/"+e.pid+"/runs/"+rid, e.c.token, nil, &fresh, http.StatusOK)
+	iters := fresh["iterations"].([]any)
+	if len(iters) != 1 {
+		t.Fatalf("iterations: got %d want 1", len(iters))
+	}
+	got := iters[0].(map[string]any)["transcript"].(string)
+	if got != transcript {
+		t.Errorf("transcript mismatch:\n got %q\nwant %q", got, transcript)
+	}
+
+	// PATCH the transcript and confirm the change persists.
+	updated := transcript + "\n\n# tool result (xyz)\nfile written"
+	res := e.c.raw("PATCH", "/api/projects/"+e.pid+"/iterations/"+iter["id"].(string),
+		e.apiKey, map[string]any{"transcript": updated})
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(res.Body)
+		t.Fatalf("PATCH iteration: %d %s", res.StatusCode, body)
+	}
+	e.c.do("GET", "/api/projects/"+e.pid+"/runs/"+rid, e.c.token, nil, &fresh, http.StatusOK)
+	iters = fresh["iterations"].([]any)
+	got2 := iters[0].(map[string]any)["transcript"].(string)
+	if got2 != updated {
+		t.Errorf("PATCH didn't update transcript:\n got %q\nwant %q", got2, updated)
+	}
+}
+
 // TestPlanApproval_AgentCanApproveOwnPlan locks in the fix shipped in
 // commit 28ae6eb: an authenticated principal (typically an API-key
 // agent acting as the planner) is allowed to approve a plan they
