@@ -139,3 +139,62 @@ label { display: block; margin: 8px 0 3px; font-size: 12px; color: var(--fg-dim)
   display: grid; grid-template-columns: auto 1fr auto; gap: 10px; align-items: center;
   padding: 8px 0; border-bottom: 1px dashed var(--border);
 }
+
+/* Annotator modal */
+.annotator-backdrop {
+  position: fixed; inset: 0; background: rgba(0,0,0,0.7);
+  display: flex; align-items: center; justify-content: center; z-index: 100;
+}
+.annotator-modal {
+  background: var(--bg-elev); border: 1px solid var(--border); border-radius: 8px;
+  width: min(95vw, 1280px); max-height: 92vh; overflow: auto;
+  display: grid; grid-template-columns: 1fr 280px; grid-template-rows: auto 1fr;
+  grid-template-areas: "header header" "stage sidebar";
+  gap: 0;
+}
+.annotator-header {
+  grid-area: header;
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 12px 16px; border-bottom: 1px solid var(--border);
+}
+.annotator-stage {
+  grid-area: stage; position: relative; background: #000;
+  display: flex; align-items: center; justify-content: center;
+  min-height: 320px;
+}
+.annotator-stage img { max-width: 100%; max-height: 70vh; display: block; }
+.annotator-canvas {
+  position: absolute; cursor: crosshair;
+  /* sized via JS to match the image; positioned by its own offset */
+  top: 50%; left: 50%; transform: translate(-50%, -50%);
+}
+.annotator-sidebar {
+  grid-area: sidebar; padding: 12px; border-left: 1px solid var(--border);
+  background: var(--bg-card); overflow-y: auto;
+}
+.annotator-sidebar h3 { margin-top: 0; }
+.annotation-item {
+  padding: 8px; margin-bottom: 8px; border-radius: 4px;
+  background: var(--bg-elev); border: 1px solid var(--border);
+}
+.annotation-item.fix_required { border-left: 3px solid var(--fail); }
+.annotation-item.nit          { border-left: 3px solid var(--warn); }
+.annotation-item.acceptable   { border-left: 3px solid var(--pass); }
+
+.annotator-form-backdrop {
+  position: absolute; inset: 0; display: flex;
+  align-items: center; justify-content: center;
+  background: rgba(0,0,0,0.6);
+}
+.annotator-form {
+  background: var(--bg-elev); border: 1px solid var(--border);
+  padding: 16px; border-radius: 6px; width: 360px;
+}
+
+@media (max-width: 720px) {
+  .annotator-modal {
+    grid-template-columns: 1fr;
+    grid-template-areas: "header" "stage" "sidebar";
+  }
+  .annotator-sidebar { border-left: 0; border-top: 1px solid var(--border); }
+}

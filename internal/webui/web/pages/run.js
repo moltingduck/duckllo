@@ -1,6 +1,7 @@
 import { api, events } from "/api.js";
 import { go, el, escapeHTML } from "/router.js";
 import { toast } from "/toast.js";
+import { openAnnotator } from "/components/annotator.js";
 
 let currentSource = null;
 
@@ -73,7 +74,8 @@ async function refresh(mount, pid, rid) {
   } else {
     const sg = el("div", { class: "sensor-grid" });
     for (const v of verifications) {
-      const tile = el("div", { class: "sensor-tile" }, [
+      const isImage = v.artifact_url && (v.kind === "screenshot" || v.kind === "visual_diff" || v.kind === "gif");
+      const tile = el("div", { class: "sensor-tile" + (isImage ? " clickable" : "") }, [
         el("div", { class: "row" }, [
           el("span", { class: "kind" }, v.kind),
           el("span", { class: "spacer" }),
@@ -81,9 +83,13 @@ async function refresh(mount, pid, rid) {
         ]),
         el("p", {}, v.summary || el("span", { class: "muted" }, "(no summary)")),
       ]);
-      if (v.artifact_url && (v.kind === "screenshot" || v.kind === "visual_diff" || v.kind === "gif")) {
+      if (isImage) {
         const img = el("img", { src: v.artifact_url, alt: v.kind });
         tile.appendChild(img);
+        tile.appendChild(el("p", { class: "muted", style: "font-size:11px;margin:6px 0 0" },
+          "Click to annotate"));
+        tile.style.cursor = "pointer";
+        tile.addEventListener("click", () => openAnnotator(pid, v));
       }
       sg.appendChild(tile);
     }
