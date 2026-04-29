@@ -75,10 +75,34 @@ async function refresh(mount, pid, rid) {
     });
     actionRow.appendChild(abort);
   }
+  // Runs parked in 'validating' or 'correcting' are awaiting human input.
+  // Offer "Mark complete" so a PM can force-finish without bouncing
+  // through the runner's claim/advance machinery.
+  if (run.status === "validating" || run.status === "correcting") {
+    const complete = el("button", {}, "Mark complete");
+    complete.addEventListener("click", async () => {
+      if (!confirm("Force this run to 'done' and mark the spec validated?")) return;
+      try {
+        await api(`/api/projects/${pid}/runs/${rid}/complete`, { method: "POST" });
+        toast("Run marked complete");
+        refresh(mount, pid, rid);
+      } catch (err) { toast(err.message, "error"); }
+    });
+    actionRow.appendChild(complete);
+  }
   const back = el("button", { class: "secondary" }, "Back to spec");
   back.addEventListener("click", () => go(`/projects/${pid}/specs/${run.spec_id}`));
   actionRow.appendChild(back);
   mount.appendChild(actionRow);
+
+  // Surface a clear "awaiting review" hint when the run is parked.
+  if (run.status === "validating") {
+    mount.appendChild(el("p", { class: "muted", style: "margin:8px 0 0;font-size:12px" },
+      "↳ Validator finished but not all criteria passed. Review the sensor grid below; post fix_required annotations to send the run back through the corrector, or click 'Mark complete' if you accept the result."));
+  } else if (run.status === "correcting") {
+    mount.appendChild(el("p", { class: "muted", style: "margin:8px 0 0;font-size:12px" },
+      "↳ Run is correcting based on annotations. Wait for the runner to claim and re-execute, or 'Mark complete' to abandon the correction loop."));
+  }
 
   // Two-column dashboard.
   const grid = el("div", { class: "run-grid", style: "margin-top:14px" });

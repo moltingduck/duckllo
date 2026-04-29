@@ -76,6 +76,7 @@ func (s *Server) routes() http.Handler {
 				r.Get("/", s.handleGetRun)
 				r.Get("/bundle", s.handleBundle)
 				r.Post("/abort", s.handleAbortRun)
+				r.Post("/complete", s.handleCompleteRun)
 				r.Post("/heartbeat", s.handleHeartbeat)
 				r.Post("/advance", s.handleAdvanceRun)
 				r.Post("/iterations", s.handleAppendIteration)

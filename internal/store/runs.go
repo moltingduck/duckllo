@@ -231,6 +231,53 @@ func (s *Store) AdvanceRun(ctx context.Context, runID uuid.UUID, runnerID, fromP
 	return &run, tx.Commit(ctx)
 }
 
+// CompleteRunByHuman is the manual-resolve path: a human in the UI
+// looks at a run parked in 'validating' or 'correcting', decides the
+// criteria are good enough, and force-marks the run done. Unlike
+// AdvanceRun this doesn't require a runner_id match (the human isn't
+// the runner that originally claimed) and unconditionally sets the
+// spec to 'validated'. Refuses to act on runs already in a terminal
+// state.
+func (s *Store) CompleteRunByHuman(ctx context.Context, runID uuid.UUID) (*models.Run, error) {
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	// Close any still-claimed work_queue items so a runner trying to
+	// heartbeat them gets a clean 410 next time.
+	_, _ = tx.Exec(ctx, `
+		UPDATE work_queue SET status = 'done', updated_at = NOW()
+		WHERE run_id = $1 AND status IN ('pending','claimed')
+	`, runID)
+
+	var run models.Run
+	err = tx.QueryRow(ctx, `
+		UPDATE runs SET
+			status = 'done',
+			finished_at = NOW(),
+			updated_at = NOW()
+		WHERE id = $1 AND status NOT IN ('done','failed','aborted')
+		RETURNING id, spec_id, COALESCE(plan_id, '00000000-0000-0000-0000-000000000000'::uuid),
+		          status, COALESCE(runner_id,''), claimed_at, lock_expires_at,
+		          workspace_meta, turn_budget, turns_used, token_usage,
+		          started_at, finished_at, created_at, updated_at
+	`, runID).Scan(&run.ID, &run.SpecID, &run.PlanID, &run.Status, &run.RunnerID,
+		&run.ClaimedAt, &run.LockExpiresAt, &run.WorkspaceMeta, &run.TurnBudget, &run.TurnsUsed, &run.TokenUsage,
+		&run.StartedAt, &run.FinishedAt, &run.CreatedAt, &run.UpdatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	if _, err := tx.Exec(ctx, `UPDATE specs SET status = 'validated', updated_at = NOW() WHERE id = $1`, run.SpecID); err != nil {
+		return nil, err
+	}
+	return &run, tx.Commit(ctx)
+}
+
 // SetRunPlan binds an in-flight run to the plan the planner just produced.
 func (s *Store) SetRunPlan(ctx context.Context, runID, planID uuid.UUID) error {
 	_, err := s.Pool.Exec(ctx, `UPDATE runs SET plan_id = $2, updated_at = NOW() WHERE id = $1`, runID, planID)

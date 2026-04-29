@@ -95,6 +95,39 @@ func (s *Server) handleGetRun(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// handleCompleteRun is the human-side counterpart to the runner's
+// /advance call: a project member parks-or-resolves a run from the UI
+// without needing the original runner_id. Used to push past a
+// validator that left the run in 'validating' awaiting review.
+func (s *Server) handleCompleteRun(w http.ResponseWriter, r *http.Request) {
+	rid, err := uuid.Parse(chiURLParam(r, "runID"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid run id")
+		return
+	}
+	st := store.New(s.pool)
+	run, err := st.RunByID(r.Context(), rid)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "run not found")
+		return
+	}
+	if !runBelongsToProject(s, r, run) {
+		writeError(w, http.StatusNotFound, "run not in this project")
+		return
+	}
+	updated, err := st.CompleteRunByHuman(r.Context(), rid)
+	if errors.Is(err, store.ErrNotFound) {
+		writeError(w, http.StatusBadRequest, "run is already in a terminal state")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	s.publish(r, "run.advanced", updated)
+	writeJSON(w, http.StatusOK, updated)
+}
+
 func (s *Server) handleAbortRun(w http.ResponseWriter, r *http.Request) {
 	rid, err := uuid.Parse(chiURLParam(r, "runID"))
 	if err != nil {
