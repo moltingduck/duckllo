@@ -297,11 +297,55 @@ func (s *Store) SetWorkspaceMeta(ctx context.Context, runID uuid.UUID, meta []by
 	return err
 }
 
-func (s *Store) AbortRun(ctx context.Context, runID uuid.UUID) error {
-	_, err := s.Pool.Exec(ctx, `
-		UPDATE runs SET status = 'aborted', finished_at = NOW(), updated_at = NOW() WHERE id = $1
-	`, runID)
-	return err
+// AbortRun is the human-side kill switch. It does three things atomically
+// so the system doesn't rot after an abort:
+//  1. flips the run to status='aborted' (so a heartbeating runner will get
+//     410 on its next ping and stop the orchestrator loop),
+//  2. closes any pending/claimed work_queue rows for this run (otherwise a
+//     fresh runner could still pick up the leftover phase), and
+//  3. drops the spec back to 'approved' so the UI doesn't show it as
+//     'running' forever and so a new run can be enqueued without manual
+//     status surgery.
+//
+// Returns ErrNotFound if the run was already in a terminal state — the
+// HTTP handler turns that into a clear 4xx instead of a misleading 204.
+func (s *Store) AbortRun(ctx context.Context, runID uuid.UUID) (*models.Run, error) {
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	var run models.Run
+	err = tx.QueryRow(ctx, `
+		UPDATE runs SET status = 'aborted', finished_at = NOW(), updated_at = NOW()
+		WHERE id = $1 AND status NOT IN ('done','failed','aborted')
+		RETURNING id, spec_id, COALESCE(plan_id, '00000000-0000-0000-0000-000000000000'::uuid),
+		          status, COALESCE(runner_id,''), claimed_at, lock_expires_at,
+		          workspace_meta, turn_budget, turns_used, token_usage,
+		          started_at, finished_at, created_at, updated_at
+	`, runID).Scan(&run.ID, &run.SpecID, &run.PlanID, &run.Status, &run.RunnerID,
+		&run.ClaimedAt, &run.LockExpiresAt, &run.WorkspaceMeta, &run.TurnBudget, &run.TurnsUsed, &run.TokenUsage,
+		&run.StartedAt, &run.FinishedAt, &run.CreatedAt, &run.UpdatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE work_queue SET status = 'done', updated_at = NOW()
+		WHERE run_id = $1 AND status IN ('pending','claimed')
+	`, runID); err != nil {
+		return nil, err
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE specs SET status = 'approved', updated_at = NOW()
+		WHERE id = $1 AND status = 'running'
+	`, run.SpecID); err != nil {
+		return nil, err
+	}
+	return &run, tx.Commit(ctx)
 }
 
 // runStatusForPhase maps the work-queue phase the runner just claimed to

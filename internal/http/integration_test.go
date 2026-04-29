@@ -930,6 +930,90 @@ func TestPlanApproval_AgentCanApproveOwnPlan(t *testing.T) {
 		nil, nil, http.StatusOK)
 }
 
+// TestAbortRun_CleansUpWorkQueueAndSpec locks in the fix where AbortRun
+// only flipped run.status='aborted' and left two states inconsistent:
+// (1) any pending/claimed work_queue rows for the run sat there forever,
+// so a fresh runner could keep claiming phases for an aborted run, and
+// (2) the parent spec stayed 'running' so the UI showed it as live and
+// you couldn't enqueue a new run without manual surgery. After the fix
+// abort must close out work_queue, drop spec.status back to 'approved',
+// and reject a second abort with 400.
+func TestAbortRun_CleansUpWorkQueueAndSpec(t *testing.T) {
+	e := setupTestEnv(t)
+
+	var spec map[string]any
+	e.c.do("POST", "/api/projects/"+e.pid+"/specs", e.c.token,
+		map[string]any{"title": "abort cleanup", "intent": "x"}, &spec, http.StatusCreated)
+	sid := spec["id"].(string)
+	e.c.do("POST", "/api/projects/"+e.pid+"/specs/"+sid+"/criteria", e.c.token,
+		map[string]any{"text": "ok", "sensor_kind": "judge"}, nil, http.StatusOK)
+	e.c.do("POST", "/api/projects/"+e.pid+"/specs/"+sid+"/approve", e.c.token, nil, nil, http.StatusOK)
+
+	var run map[string]any
+	e.c.do("POST", "/api/projects/"+e.pid+"/specs/"+sid+"/runs", e.c.token,
+		map[string]any{}, &run, http.StatusCreated)
+	rid := run["id"].(string)
+
+	// Claim plan so a work_queue row is in 'claimed' state, then leak it
+	// (don't advance) — exactly the situation a runner crash creates.
+	var claim struct {
+		WorkItem map[string]any `json:"work_item"`
+	}
+	e.c.do("POST", "/api/projects/"+e.pid+"/work/claim", e.apiKey,
+		map[string]any{"runner_id": e.runnerID, "phases": []string{"plan"}},
+		&claim, http.StatusOK)
+
+	// Spec must currently be 'running' (set by EnqueueRun).
+	var specBefore map[string]any
+	e.c.do("GET", "/api/projects/"+e.pid+"/specs/"+sid, e.c.token, nil, &specBefore, http.StatusOK)
+	if got := specBefore["spec"].(map[string]any)["status"]; got != "running" {
+		t.Fatalf("pre-abort spec status: got %v want running", got)
+	}
+
+	// Abort. Must publish the new state via the run resource.
+	res := e.c.raw("POST", "/api/projects/"+e.pid+"/runs/"+rid+"/abort", e.c.token, nil)
+	if res.StatusCode != http.StatusNoContent {
+		body, _ := io.ReadAll(res.Body)
+		res.Body.Close()
+		t.Fatalf("abort: got %d: %s", res.StatusCode, body)
+	}
+	res.Body.Close()
+
+	// Run.status = aborted.
+	var runAfter map[string]any
+	e.c.do("GET", "/api/projects/"+e.pid+"/runs/"+rid, e.c.token, nil, &runAfter, http.StatusOK)
+	if got := runAfter["run"].(map[string]any)["status"]; got != "aborted" {
+		t.Fatalf("post-abort run status: got %v want aborted", got)
+	}
+
+	// Spec dropped back to 'approved' so a new run can be enqueued.
+	var specAfter map[string]any
+	e.c.do("GET", "/api/projects/"+e.pid+"/specs/"+sid, e.c.token, nil, &specAfter, http.StatusOK)
+	if got := specAfter["spec"].(map[string]any)["status"]; got != "approved" {
+		t.Errorf("post-abort spec status: got %v want approved", got)
+	}
+
+	// Work queue is drained: a fresh claim across all phases returns 204.
+	res2 := e.c.raw("POST", "/api/projects/"+e.pid+"/work/claim", e.apiKey,
+		map[string]any{"runner_id": "fresh-runner",
+			"phases": []string{"plan", "execute", "validate", "correct"}})
+	if res2.StatusCode != http.StatusNoContent {
+		body, _ := io.ReadAll(res2.Body)
+		res2.Body.Close()
+		t.Errorf("post-abort claim should be 204; got %d: %s", res2.StatusCode, body)
+	}
+	res2.Body.Close()
+
+	// Second abort on already-terminal run returns 400, not a silent 204.
+	res3 := e.c.raw("POST", "/api/projects/"+e.pid+"/runs/"+rid+"/abort", e.c.token, nil)
+	if res3.StatusCode != http.StatusBadRequest {
+		body, _ := io.ReadAll(res3.Body)
+		res3.Body.Close()
+		t.Errorf("second abort should be 400; got %d: %s", res3.StatusCode, body)
+	}
+	res3.Body.Close()
+}
+
 // TestPlanApproval_AgentCannotApproveOthersPlan asserts the negative
 // case: an API-key agent shouldn't be able to approve a plan someone
 // else created. The product-manager gate stays on for plans you didn't
