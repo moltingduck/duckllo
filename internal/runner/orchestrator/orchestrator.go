@@ -185,7 +185,18 @@ func (o *Orchestrator) runPlanner(ctx context.Context, work *client.WorkItem, b 
 		return fmt.Errorf("create plan: %w", err)
 	}
 	if err := o.Client.ApprovePlan(ctx, plan.ID); err != nil {
-		log.Printf("planner: approve failed (will need human approval): %v", err)
+		// Approval failure must be loud, not silent. Earlier we only
+		// log+continued, which let runs advance to execute against an
+		// unapproved plan — the dogfood loop ran with apparently-correct
+		// behaviour but the run record didn't reflect what actually
+		// shipped. Now we post the iteration (so the operator sees the
+		// planner's draft) and bubble up an error so the run is marked
+		// failed; the operator can review the plan in the UI, approve
+		// it, and start a fresh run that begins at execute.
+		_, _ = o.postIteration(ctx, work.RunID, "plan", "planner",
+			fmt.Sprintf("Drafted plan with %d steps; approval failed: %s",
+				len(parsed.Steps), err.Error()), resp)
+		return fmt.Errorf("auto-approve plan: %w", err)
 	}
 	if _, err := o.postIteration(ctx, work.RunID, "plan", "planner",
 		fmt.Sprintf("Drafted plan with %d steps", len(parsed.Steps)), resp); err != nil {
