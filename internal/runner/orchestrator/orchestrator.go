@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"strings"
 
 	"github.com/google/uuid"
 
@@ -239,12 +240,108 @@ func (o *Orchestrator) runExecutor(ctx context.Context, work *client.WorkItem, b
 	if lastResp != nil && lastResp.Text != "" {
 		summary = trimSummary(lastResp.Text, 280)
 	}
-	if _, err := o.postIteration(ctx, work.RunID, "execute", "executor", summary, lastResp); err != nil {
+	log.Printf("execute: posting iteration with summary=%q", summary)
+	it, err := o.postIteration(ctx, work.RunID, "execute", "executor", summary, lastResp)
+	if err != nil {
+		log.Printf("execute: postIteration failed: %v", err)
 		return err
 	}
+	log.Printf("execute: iteration posted id=%s; capturing workspace changes", it.ID)
+
+	// Capture workspace changes so the validator's judge — which on most
+	// providers (Anthropic / OpenAI / Ollama) has no filesystem access —
+	// can see what actually changed in the workspace, not just what the
+	// executor *said* it did.
+	o.postWorkspaceChanges(ctx, work.RunID, it.ID)
+
 	return o.Client.Advance(ctx, work.RunID, client.AdvanceRequest{
 		RunnerID: o.RunnerID, FromPhase: "execute", ToPhase: "validate",
 	})
+}
+
+// postWorkspaceChanges runs `git status --porcelain` + `git diff` inside
+// the workspace and posts the result as a verification of kind
+// `workspace_changes`. Best-effort — silently skips when the workspace
+// isn't a git repo or git isn't available. The diff is also recorded in
+// details_json so it surfaces in the bundle's verification list and the
+// validator can include it in the judge's prompt.
+func (o *Orchestrator) postWorkspaceChanges(ctx context.Context, runID, iterationID uuid.UUID) {
+	if o.sandbox == nil {
+		log.Printf("workspace_changes: sandbox nil, skipping")
+		return
+	}
+
+	statusOut, err := o.sandbox.Workspace.Exec(ctx, []string{"git", "status", "--porcelain"})
+	if err != nil {
+		log.Printf("workspace_changes: git status failed: %v (output=%q)", err, string(statusOut))
+		return
+	}
+	statusStr := strings.TrimSpace(string(statusOut))
+	if statusStr == "" {
+		// Clean tree — still post a verification so the validator knows
+		// there was nothing to change. Useful signal vs "executor never
+		// touched anything".
+		_, _ = o.Client.PostVerification(ctx, runID, client.PostVerificationReq{
+			IterationID: iterationID.String(),
+			Kind:        "workspace_changes",
+			Class:       "computational",
+			Status:      "warn",
+			Summary:     "executor produced no workspace changes (clean working tree)",
+			Details:     map[string]any{"diff": "", "status": ""},
+		})
+		log.Printf("workspace_changes: clean tree (warn)")
+		return
+	}
+
+	diffOut, err := o.sandbox.Workspace.Exec(ctx, []string{"git", "diff", "--no-color"})
+	if err != nil {
+		log.Printf("workspace_changes: git diff failed: %v", err)
+		return
+	}
+
+	const diffCap = 16 * 1024
+	diffStr := string(diffOut)
+	truncated := false
+	if len(diffStr) > diffCap {
+		diffStr = diffStr[:diffCap] + "\n[truncated]"
+		truncated = true
+	}
+
+	// Count changed paths from the porcelain output (one path per line).
+	paths := []string{}
+	for _, line := range strings.Split(statusStr, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		// porcelain format: "XY path" — keep just the path.
+		if i := strings.Index(line, " "); i > 0 && i+1 < len(line) {
+			paths = append(paths, strings.TrimSpace(line[i+1:]))
+		}
+	}
+	summary := fmt.Sprintf("%d changed path(s): %s", len(paths), strings.Join(paths, ", "))
+	if len(summary) > 240 {
+		summary = summary[:240] + "…"
+	}
+
+	_, postErr := o.Client.PostVerification(ctx, runID, client.PostVerificationReq{
+		IterationID: iterationID.String(),
+		Kind:        "workspace_changes",
+		Class:       "computational",
+		Status:      "pass",
+		Summary:     summary,
+		Details: map[string]any{
+			"status":    statusStr,
+			"diff":      diffStr,
+			"paths":     paths,
+			"truncated": truncated,
+		},
+	})
+	if postErr != nil {
+		log.Printf("workspace_changes: post failed: %v", postErr)
+		return
+	}
+	log.Printf("workspace_changes: posted (%d paths, %d-byte diff)", len(paths), len(diffStr))
 }
 
 // runValidator fires every sensor matching the criterion kinds, posts a
