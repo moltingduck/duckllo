@@ -202,6 +202,7 @@ func (s *Server) handleRejectSpec(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	s.publish(r, "spec.updated", updated)
 	writeJSON(w, http.StatusOK, updated)
 }
 

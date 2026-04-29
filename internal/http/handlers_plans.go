@@ -43,6 +43,7 @@ func (s *Server) handleCreatePlan(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	s.publish(r, "plan.created", plan)
 	writeJSON(w, http.StatusCreated, plan)
 }
 
@@ -84,6 +85,7 @@ func (s *Server) handlePatchPlan(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	s.publish(r, "plan.updated", updated)
 	writeJSON(w, http.StatusOK, updated)
 }
 
@@ -126,6 +128,7 @@ func (s *Server) handleApprovePlan(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	s.publish(r, "plan.approved", updated)
 	writeJSON(w, http.StatusOK, updated)
 }
 

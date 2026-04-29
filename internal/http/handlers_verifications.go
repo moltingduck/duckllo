@@ -128,6 +128,7 @@ func (s *Server) handlePatchVerification(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	s.publish(r, "verification.updated", v)
 	writeJSON(w, http.StatusOK, v)
 }
 
