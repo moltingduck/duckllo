@@ -13,11 +13,11 @@ import (
 
 const runLockTTL = 90 * time.Second
 
-// EnqueueRun creates a run for the given spec+plan pair and pushes the
-// initial 'plan' phase onto the work queue. The phase the runner should
-// claim depends on whether the plan already has steps; for v1 we always
-// start from 'plan' because the planner agent owns the first iteration.
-func (s *Store) EnqueueRun(ctx context.Context, specID, planID uuid.UUID, turnBudget int) (*models.Run, error) {
+// EnqueueRun creates a run for the given spec, optionally pre-bound to an
+// approved plan. If planID is the zero UUID, the run starts in the 'plan'
+// phase and the planner agent owns the first iteration; once it approves
+// a new plan, SetRunPlan binds the run to it.
+func (s *Store) EnqueueRun(ctx context.Context, specID uuid.UUID, planID *uuid.UUID, turnBudget int) (*models.Run, error) {
 	if turnBudget <= 0 {
 		turnBudget = 50
 	}
@@ -31,7 +31,8 @@ func (s *Store) EnqueueRun(ctx context.Context, specID, planID uuid.UUID, turnBu
 	if err := tx.QueryRow(ctx, `
 		INSERT INTO runs (spec_id, plan_id, status, turn_budget)
 		VALUES ($1, $2, 'queued', $3)
-		RETURNING id, spec_id, plan_id, status, COALESCE(runner_id,''), claimed_at, lock_expires_at,
+		RETURNING id, spec_id, COALESCE(plan_id, '00000000-0000-0000-0000-000000000000'::uuid),
+		          status, COALESCE(runner_id,''), claimed_at, lock_expires_at,
 		          workspace_meta, turn_budget, turns_used, token_usage,
 		          started_at, finished_at, created_at, updated_at
 	`, specID, planID, turnBudget).Scan(
@@ -42,12 +43,14 @@ func (s *Store) EnqueueRun(ctx context.Context, specID, planID uuid.UUID, turnBu
 		return nil, err
 	}
 
-	// First work item: an executor phase. We skip 'plan' here because in
-	// v1 the user has already approved the plan before the run is created;
-	// runners that want to re-plan can post a new plan and re-enqueue.
+	// First work item: 'plan' if no plan was bound, else 'execute'.
+	startPhase := "execute"
+	if planID == nil {
+		startPhase = "plan"
+	}
 	if _, err := tx.Exec(ctx, `
-		INSERT INTO work_queue (run_id, phase, status) VALUES ($1, 'execute', 'pending')
-	`, run.ID); err != nil {
+		INSERT INTO work_queue (run_id, phase, status) VALUES ($1, $2, 'pending')
+	`, run.ID, startPhase); err != nil {
 		return nil, err
 	}
 
@@ -166,8 +169,9 @@ func (s *Store) HeartbeatRun(ctx context.Context, runID uuid.UUID, runnerID stri
 }
 
 // AdvanceRun marks the current work item done, optionally enqueues the next
-// phase, and updates the run's status. Used at the end of each PEVC phase.
-func (s *Store) AdvanceRun(ctx context.Context, runID uuid.UUID, runnerID, fromPhase, toPhase string, finalStatus string) (*models.Run, error) {
+// phase, and updates the run's status. Optionally binds a new plan_id —
+// the planner uses this to attach the plan it just produced.
+func (s *Store) AdvanceRun(ctx context.Context, runID uuid.UUID, runnerID, fromPhase, toPhase string, finalStatus string, planID *uuid.UUID) (*models.Run, error) {
 	tx, err := s.Pool.Begin(ctx)
 	if err != nil {
 		return nil, err
@@ -179,6 +183,12 @@ func (s *Store) AdvanceRun(ctx context.Context, runID uuid.UUID, runnerID, fromP
 		WHERE run_id = $1 AND phase = $2 AND status = 'claimed' AND claimed_by = $3
 	`, runID, fromPhase, runnerID); err != nil {
 		return nil, err
+	}
+
+	if planID != nil {
+		if _, err := tx.Exec(ctx, `UPDATE runs SET plan_id = $2 WHERE id = $1`, runID, *planID); err != nil {
+			return nil, err
+		}
 	}
 
 	if toPhase != "" {
@@ -219,6 +229,12 @@ func (s *Store) AdvanceRun(ctx context.Context, runID uuid.UUID, runnerID, fromP
 		}
 	}
 	return &run, tx.Commit(ctx)
+}
+
+// SetRunPlan binds an in-flight run to the plan the planner just produced.
+func (s *Store) SetRunPlan(ctx context.Context, runID, planID uuid.UUID) error {
+	_, err := s.Pool.Exec(ctx, `UPDATE runs SET plan_id = $2, updated_at = NOW() WHERE id = $1`, runID, planID)
+	return err
 }
 
 func (s *Store) AbortRun(ctx context.Context, runID uuid.UUID) error {

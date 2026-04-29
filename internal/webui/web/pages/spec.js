@@ -66,8 +66,9 @@ async function refresh(mount, pid, sid) {
     });
     actionRow.appendChild(approveBtn);
   }
-  if (spec.status === "approved" && plans.find((p) => p.status === "approved")) {
-    const runBtn = el("button", {}, "Start run");
+  if (spec.status === "approved") {
+    const hasApprovedPlan = plans.find((p) => p.status === "approved");
+    const runBtn = el("button", {}, hasApprovedPlan ? "Start run" : "Start run (planner will draft a plan)");
     runBtn.addEventListener("click", async () => {
       try {
         const run = await api(`/api/projects/${pid}/specs/${sid}/runs`, { method: "POST", body: {} });

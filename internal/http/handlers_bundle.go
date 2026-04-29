@@ -41,10 +41,14 @@ func (s *Server) handleBundle(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	plan, err := st.PlanByID(r.Context(), run.PlanID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
+	// plan_id may still be unbound if we're in the 'plan' phase pre-planner.
+	var plan *models.Plan
+	if run.PlanID != (uuid.UUID{}) {
+		plan, err = st.PlanByID(r.Context(), run.PlanID)
+		if err != nil && !errors.Is(err, store.ErrNotFound) {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
 	}
 
 	rules, err := st.ListEnabledRules(r.Context(), spec.ProjectID, spec.TopologyID)

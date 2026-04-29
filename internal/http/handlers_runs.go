@@ -26,7 +26,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	var req createRunReq
 	_ = decodeJSON(r, &req) // body optional
 
-	var plan *models.Plan
+	var planPtr *uuid.UUID
 	if req.PlanID != "" {
 		pid, err := uuid.Parse(req.PlanID)
 		if err != nil {
@@ -46,20 +46,16 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, "plan is not approved")
 			return
 		}
-		plan = p
-	} else {
-		p, err := st.LatestApprovedPlan(r.Context(), spec.ID)
-		if errors.Is(err, store.ErrNotFound) {
-			writeError(w, http.StatusBadRequest, "spec has no approved plan; create+approve a plan first")
-			return
-		}
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, err.Error())
-			return
-		}
-		plan = p
+		planPtr = &p.ID
+	} else if p, err := st.LatestApprovedPlan(r.Context(), spec.ID); err == nil {
+		planPtr = &p.ID
+	} else if !errors.Is(err, store.ErrNotFound) {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
 	}
-	run, err := st.EnqueueRun(r.Context(), spec.ID, plan.ID, req.TurnBudget)
+	// If still no plan, the run starts in 'plan' phase and the planner
+	// agent will draft+approve a plan as its first iteration.
+	run, err := st.EnqueueRun(r.Context(), spec.ID, planPtr, req.TurnBudget)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -186,6 +182,7 @@ type advanceReq struct {
 	FromPhase   string `json:"from_phase"`
 	ToPhase     string `json:"to_phase,omitempty"`     // empty = no follow-up; only valid with FinalStatus
 	FinalStatus string `json:"final_status,omitempty"` // done | failed | aborted | (empty)
+	PlanID      string `json:"plan_id,omitempty"`      // planner uses this to bind the new plan atomically
 }
 
 func (s *Server) handleAdvanceRun(w http.ResponseWriter, r *http.Request) {
@@ -207,7 +204,16 @@ func (s *Server) handleAdvanceRun(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid to_phase")
 		return
 	}
-	run, err := store.New(s.pool).AdvanceRun(r.Context(), rid, req.RunnerID, req.FromPhase, req.ToPhase, req.FinalStatus)
+	var planPtr *uuid.UUID
+	if req.PlanID != "" {
+		pid, err := uuid.Parse(req.PlanID)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "invalid plan_id")
+			return
+		}
+		planPtr = &pid
+	}
+	run, err := store.New(s.pool).AdvanceRun(r.Context(), rid, req.RunnerID, req.FromPhase, req.ToPhase, req.FinalStatus, planPtr)
 	if errors.Is(err, store.ErrNotFound) {
 		writeError(w, http.StatusGone, "run lock expired or runner mismatch")
 		return
