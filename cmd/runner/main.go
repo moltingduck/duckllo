@@ -48,8 +48,9 @@ func main() {
 		workspaceDir = flag.String("workspace", env("DUCKLLO_WORKSPACE", "./workspace"), "filesystem path the executor edits (host mode)")
 		model       = flag.String("model", env("DUCKLLO_MODEL", ""), "Anthropic model id (default claude-sonnet-4-6)")
 		anthropic   = flag.String("anthropic-key", os.Getenv("ANTHROPIC_API_KEY"), "Anthropic API key")
-		intervalSec = flag.Int("poll-interval", 5, "seconds between empty-claim retries")
-		once        = flag.Bool("once", false, "claim and process exactly one work item then exit")
+		intervalSec  = flag.Int("poll-interval", 5, "seconds between empty-claim retries")
+		once         = flag.Bool("once", false, "claim and process exactly one work item then exit")
+		exitWhenIdle = flag.Bool("exit-when-idle", false, "drain pending work and exit on the first empty claim (good for one-spec dogfood runs)")
 		devURL      = flag.String("dev-url", env("DUCKLLO_DEV_URL", ""), "base URL of the dev server, used by screenshot sensor")
 		chromePath  = flag.String("chrome-path", env("DUCKLLO_CHROME_PATH", ""), "override Chrome/Chromium binary path")
 		image          = flag.String("container-image", env("DUCKLLO_CONTAINER_IMAGE", ""), "Docker image for per-run workspaces (empty = run on host)")
@@ -147,7 +148,7 @@ func main() {
 
 		claim, err := c.Claim(ctx, *runnerID, roles)
 		if errors.Is(err, client.ErrNoWork) {
-			if *once {
+			if *once || *exitWhenIdle {
 				log.Printf("no work; exiting")
 				return
 			}

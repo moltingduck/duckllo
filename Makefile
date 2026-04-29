@@ -34,6 +34,12 @@ selfhost:
 runner:
 	go run ./cmd/runner
 
+# Drain the queue end-to-end (plan + execute + validate for one spec)
+# and exit on first idle claim. Useful for one-shot dogfood verification:
+#   make selfhost && make serve & make runner-once
+runner-once:
+	go run ./cmd/runner --exit-when-idle
+
 build:
 	mkdir -p bin
 	CGO_ENABLED=0 go build -o bin/duckllo     ./cmd/duckllo
