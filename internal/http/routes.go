@@ -18,6 +18,7 @@ func (s *Server) routes() http.Handler {
 	r.Get("/api/health", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
+	r.Get("/api/status", s.handleStatus)
 
 	// Public auth surface.
 	r.Post("/api/auth/register", s.handleRegister)

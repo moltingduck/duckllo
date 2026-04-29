@@ -112,6 +112,8 @@ func (s *Server) authenticate(next http.Handler) http.Handler {
 			writeError(w, http.StatusUnauthorized, "session owner not available")
 			return
 		}
+		// Sliding expiration — no-op when the lease is still fresh.
+		_ = st.TouchSession(ctx, sess.Token)
 		ctx = context.WithValue(ctx, ctxUser, user)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
