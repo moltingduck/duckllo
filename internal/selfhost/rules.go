@@ -193,4 +193,58 @@ actually saw and said — don't try to reconstruct from logs or
 re-run the spec. The Web UI's iteration timeline exposes a
 "View transcript" expander on each card.`,
 	},
+	{
+		Kind: "agents_md",
+		Name: "SQL: parenthesise OR clauses before adding ANDs",
+		Body: `SQL binds AND tighter than OR. The work_queue claim shipped
+with
+
+    WHERE status = 'pending'
+       OR (status = 'claimed' AND lock_expires_at < NOW())
+      AND ($2 IS NULL OR phase = ANY($2))
+
+which silently parses as 'pending' OR (claimed AND expired AND phase
+filter), so a runner asking phases=['execute'] would steal a pending
+plan row. Fix is one set of outer parens around the status disjunction.
+Whenever you write OR across status branches and follow it with another
+filter, wrap the OR explicitly. See commit e1feafa for the bug-test pair.`,
+	},
+	{
+		Kind: "agents_md",
+		Name: "Lifecycle endpoints are atomic and full-cleanup",
+		Body: `Whenever a run reaches a terminal state (done/failed/aborted),
+three pieces of state must move together in one transaction: (1) the run
+row, (2) any pending/claimed work_queue rows for that run, (3) the spec
+status (validated on done, approved on failed/aborted/non-pass). And
+(4) the HTTP handler must publish the resulting run.advanced over SSE
+or the dashboard goes stale. AbortRun, AdvanceRun(failed),
+CompleteRunByHuman all follow this pattern; if you add a new lifecycle
+verb, port the pattern. See commit 1d5e742 for what happens when you
+forget step (2).`,
+	},
+	{
+		Kind: "agents_md",
+		Name: "Spec → run is an atomic check-and-set",
+		Body: `EnqueueRun gates the transition with
+'UPDATE specs SET status=running WHERE id=$1 AND status=approved
+RETURNING id'. If 0 rows come back, return ErrSpecNotEnqueueable —
+which the HTTP handler maps to 400. This is the only thing keeping two
+concurrent POST /runs against the same spec from spawning two runners
+on the same workspace. Don't bypass it: if you need to "re-run" a
+validated spec, the user should explicitly move the spec back to
+approved (e.g. by editing criteria), not have the run-creation path
+do an implicit transition.`,
+	},
+	{
+		Kind: "agents_md",
+		Name: "Tear down workspaces on phase error too",
+		Body: `Orchestrator.Run() previously called teardown() only when the
+re-fetched run.status was already terminal. But cmd/runner.Run's
+Advance(FinalStatus=failed) call happens *after* Run() returns — so on
+phase error the teardown saw 'executing' and skipped removal, leaking
+one container per failure. Treat any non-nil err from a phase function
+as "this run is going terminal" and tear down. The cost on a transient
+error is one fresh container next claim; the cost of the old behaviour
+was N containers per failing run. See commit 3a9027d.`,
+	},
 }
