@@ -386,18 +386,22 @@ func (o *Orchestrator) runValidator(ctx context.Context, work *client.WorkItem, 
 		}
 		s := o.Sensors.For(c.SensorKind)
 		if s == nil {
-			_, _ = o.Client.PostVerification(ctx, work.RunID, client.PostVerificationReq{
+			if _, err := o.Client.PostVerification(ctx, work.RunID, client.PostVerificationReq{
 				CriterionID: c.ID, Kind: c.SensorKind, Class: "computational",
 				Status: "skipped", Summary: "no sensor implementation for kind " + c.SensorKind,
-			})
+			}); err != nil {
+				log.Printf("validator: post skipped verification for %s: %v", c.SensorKind, err)
+			}
 			continue
 		}
 		res, err := s.Run(ctx, c, env)
 		if err != nil {
-			_, _ = o.Client.PostVerification(ctx, work.RunID, client.PostVerificationReq{
+			if _, postErr := o.Client.PostVerification(ctx, work.RunID, client.PostVerificationReq{
 				CriterionID: c.ID, Kind: c.SensorKind, Class: "computational",
 				Status: "fail", Summary: "sensor error: " + err.Error(),
-			})
+			}); postErr != nil {
+				log.Printf("validator: post sensor-error verification for %s: %v", c.SensorKind, postErr)
+			}
 			continue
 		}
 		if err := o.postSensorResult(ctx, work.RunID, c, res); err != nil {
@@ -426,10 +430,13 @@ func (o *Orchestrator) runValidator(ctx context.Context, work *client.WorkItem, 
 			judgeResp = resp
 			raw, perr := extractJSONBlock(resp.Text)
 			if perr != nil {
-				_, _ = o.Client.PostVerification(ctx, work.RunID, client.PostVerificationReq{
+				log.Printf("judge: missing JSON block (got %d chars); posting warn verification", len(resp.Text))
+				if _, err := o.Client.PostVerification(ctx, work.RunID, client.PostVerificationReq{
 					Kind: "judge", Class: "inferential", Status: "warn",
 					Summary: "validator output missing JSON block",
-				})
+				}); err != nil {
+					log.Printf("judge: post warn verification: %v", err)
+				}
 			} else {
 				var parsed struct {
 					Verdicts []struct {
@@ -438,12 +445,16 @@ func (o *Orchestrator) runValidator(ctx context.Context, work *client.WorkItem, 
 						Summary     string `json:"summary"`
 					} `json:"verdicts"`
 				}
-				if err := json.Unmarshal([]byte(raw), &parsed); err == nil {
+				if err := json.Unmarshal([]byte(raw), &parsed); err != nil {
+					log.Printf("judge: parse JSON: %v (raw=%q)", err, raw)
+				} else {
 					for _, v := range parsed.Verdicts {
-						_, _ = o.Client.PostVerification(ctx, work.RunID, client.PostVerificationReq{
+						if _, err := o.Client.PostVerification(ctx, work.RunID, client.PostVerificationReq{
 							CriterionID: v.CriterionID, Kind: "judge", Class: "inferential",
 							Status: v.Status, Summary: v.Summary,
-						})
+						}); err != nil {
+							log.Printf("judge: post verdict %q: %v", v.Status, err)
+						}
 					}
 				}
 			}
