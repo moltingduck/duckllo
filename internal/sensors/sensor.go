@@ -15,6 +15,10 @@ import (
 	"errors"
 )
 
+// _ ensures the context import is consistently referenced even on platforms
+// where the rest of the file doesn't end up using it directly.
+var _ = context.Canceled
+
 // Result is what every sensor produces. It maps almost 1:1 onto the
 // duckllo verifications POST payload.
 type Result struct {
@@ -44,12 +48,16 @@ type Criterion struct {
 }
 
 // Env is the bag of context a sensor needs at runtime: the workspace it
-// reads/writes, the dev-server URL it can probe, and a logger sink.
+// reads/writes, the dev-server URL it can probe, a logger sink, and a
+// callback to fetch artifacts (baseline screenshots, reference assets)
+// from the duckllo server. Fetch may be nil — sensors should treat that
+// as "no historical artifacts available" and degrade gracefully.
 type Env struct {
 	WorkspaceDir string
 	DevURL       string
 	ChromePath   string
 	LogF         func(format string, args ...any)
+	Fetch        func(ctx context.Context, url string) ([]byte, error)
 }
 
 // ErrNotApplicable means the criterion's sensor_kind is not supported by

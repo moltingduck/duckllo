@@ -261,6 +261,7 @@ func (o *Orchestrator) runValidator(ctx context.Context, work *client.WorkItem, 
 		DevURL:       o.activeDevURL,
 		ChromePath:   o.ChromePath,
 		LogF:         func(f string, args ...any) { log.Printf(f, args...) },
+		Fetch:        o.Client.FetchArtifact,
 	}
 
 	deterministicFired := 0

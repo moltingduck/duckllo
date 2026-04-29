@@ -23,6 +23,15 @@ async function refresh(mount, pid, rid) {
   const run = data.run;
   const iterations = data.iterations || [];
 
+  // Fetch the spec so the annotator can offer "Set as baseline" when a
+  // verification corresponds to a screenshot/visual_diff criterion.
+  let spec = null;
+  let critByID = {};
+  try {
+    spec = (await api(`/api/projects/${pid}/specs/${run.spec_id}`)).spec;
+    for (const c of spec.acceptance_criteria || []) critByID[c.id] = c;
+  } catch (_) { /* tolerable; annotator just won't show the button */ }
+
   mount.innerHTML = "";
   mount.appendChild(el("h1", {}, "Run " + run.id.slice(0, 8)));
   mount.appendChild(el("p", { class: "muted mono" },
@@ -89,7 +98,8 @@ async function refresh(mount, pid, rid) {
         tile.appendChild(el("p", { class: "muted", style: "font-size:11px;margin:6px 0 0" },
           "Click to annotate"));
         tile.style.cursor = "pointer";
-        tile.addEventListener("click", () => openAnnotator(pid, v));
+        const ctx = spec ? { specID: spec.id, criterion: critByID[v.criterion_id] } : {};
+        tile.addEventListener("click", () => openAnnotator(pid, v, ctx));
       }
       sg.appendChild(tile);
     }

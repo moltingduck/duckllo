@@ -20,6 +20,12 @@ func DefaultRegistry() *Registry {
 	r.Set("e2e_test", NewShellSensor("e2e_test", []string{"go", "test", "-tags=e2e", "./..."}))
 	r.Set("build", NewShellSensor("build", []string{"go", "build", "./..."}))
 	r.Set("screenshot", NewScreenshotSensor())
+	// visual_diff is implemented by the screenshot sensor when the
+	// criterion's sensor_spec.baseline_url is set. Registering both
+	// kinds against the same struct lets a project encode the criterion
+	// as either kind at the spec level — the runtime behaviour is
+	// identical.
+	r.Set("visual_diff", NewScreenshotSensor())
 	// 'judge' and 'manual' are intentionally absent — orchestrator handles
 	// the inferential judge directly, and 'manual' criteria are skipped
 	// (the human is the sensor).

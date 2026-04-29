@@ -79,6 +79,57 @@ func (s *ScreenshotSensor) Run(ctx context.Context, c Criterion, env Env) (*Resu
 		}, nil
 	}
 
+	// If the criterion has a baseline_url, run a pixel diff and post a
+	// visual_diff verification. Falling back to a plain screenshot if the
+	// baseline can't be fetched keeps the sensor robust against flaky
+	// network conditions or a freshly-rotated baseline reference.
+	if baseURL, ok := c.SensorSpec["baseline_url"].(string); ok && baseURL != "" && env.Fetch != nil {
+		baselineBytes, err := env.Fetch(ctx, baseURL)
+		if err != nil {
+			return &Result{
+				Status: "warn", Class: "computational",
+				Summary: "could not fetch baseline (" + oneLine(err.Error()) + ") — falling back to screenshot",
+				ArtifactBytes: pngBytes, ContentType: "image/png", FileName: "screenshot.png",
+				Details: map[string]any{"url": url, "baseline_url": baseURL},
+			}, nil
+		}
+		tolerance := 16
+		if t, ok := numAsInt(c.SensorSpec["tolerance"]); ok {
+			tolerance = t
+		}
+		diffPNG, diffPx, total, err := PixelDiff(baselineBytes, pngBytes, tolerance)
+		if err != nil {
+			return &Result{
+				Status: "warn", Class: "computational",
+				Summary: "pixel diff error: " + oneLine(err.Error()),
+				ArtifactBytes: pngBytes, ContentType: "image/png", FileName: "screenshot.png",
+			}, nil
+		}
+		percent := 0.0
+		if total > 0 {
+			percent = float64(diffPx) * 100 / float64(total)
+		}
+		threshold := 0.5 // %
+		if t, ok := c.SensorSpec["diff_threshold"].(float64); ok {
+			threshold = t
+		}
+		status := "pass"
+		if percent > threshold {
+			status = "fail"
+		}
+		return &Result{
+			Status: status, Class: "computational",
+			Summary: fmt.Sprintf("%.2f%% pixels differ (%d / %d, threshold %.2f%%)",
+				percent, diffPx, total, threshold),
+			ArtifactBytes: diffPNG, ContentType: "image/png", FileName: "diff.png",
+			Details: map[string]any{
+				"url": url, "selector": selector, "baseline_url": baseURL,
+				"diff_pixels": diffPx, "total_pixels": total,
+				"percent_diff": percent, "tolerance": tolerance, "threshold": threshold,
+			},
+		}, nil
+	}
+
 	return &Result{
 		Status: "pass", Class: "computational",
 		Summary: fmt.Sprintf("captured %dx%d screenshot of %s", w, h, url),

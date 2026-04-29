@@ -21,6 +21,8 @@ import (
 	"github.com/google/uuid"
 )
 
+var _ = errors.New // keep imports stable when SDK churn drops one
+
 type Client struct {
 	BaseURL   string
 	APIKey    string
@@ -344,4 +346,28 @@ func (c *Client) projectPath(suffix string) string {
 // Docker provisioning succeeds.
 func (c *Client) SetWorkspaceMeta(ctx context.Context, runID uuid.UUID, meta map[string]any) error {
 	return c.do(ctx, "POST", c.projectPath(fmt.Sprintf("/runs/%s/workspace", runID)), meta, nil)
+}
+
+// FetchArtifact GETs an artifact (typically a screenshot baseline) by URL.
+// Accepts either an absolute URL or a server-relative path like
+// /api/uploads/<uuid>.png — the latter is what verification rows store.
+func (c *Client) FetchArtifact(ctx context.Context, urlOrPath string) ([]byte, error) {
+	full := urlOrPath
+	if strings.HasPrefix(urlOrPath, "/") {
+		full = c.BaseURL + urlOrPath
+	}
+	req, err := http.NewRequestWithContext(ctx, "GET", full, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+c.APIKey)
+	res, err := c.HTTP.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer res.Body.Close()
+	if res.StatusCode >= 400 {
+		return nil, fmt.Errorf("fetch %s: %d", urlOrPath, res.StatusCode)
+	}
+	return io.ReadAll(res.Body)
 }

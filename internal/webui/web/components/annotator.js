@@ -7,7 +7,7 @@
 // on the server side (see store.CreateAnnotation), which is how the
 // human's signal becomes the corrector agent's next prompt.
 
-import { api, get, post } from "/api.js";
+import { api, get, post, patch } from "/api.js";
 import { el } from "/router.js";
 import { toast } from "/toast.js";
 
@@ -17,7 +17,12 @@ const VERDICTS = [
   { value: "acceptable",   label: "Acceptable (no action)" },
 ];
 
-export async function openAnnotator(pid, verification) {
+// openAnnotator(pid, verification, ctx?)
+//   ctx.specID    optional — when present plus a screenshot criterion,
+//                 the modal shows a "Set as baseline" button.
+//   ctx.criterion optional — the matching criterion for the verification;
+//                 lets the modal know whether the kind supports baselines.
+export async function openAnnotator(pid, verification, ctx = {}) {
   // Backdrop + modal scaffold.
   const backdrop = el("div", { class: "annotator-backdrop" });
   const modal = el("div", { class: "annotator-modal" });
@@ -27,9 +32,40 @@ export async function openAnnotator(pid, verification) {
   function close() { backdrop.remove(); }
   backdrop.addEventListener("click", (e) => { if (e.target === backdrop) close(); });
 
+  const headerActions = el("div", { class: "row", style: "gap:8px" });
+
+  // "Set as baseline" — only meaningful for visual sensors with a known
+  // criterion. When clicked we PATCH the spec's acceptance_criteria,
+  // setting the criterion's sensor_spec.baseline_url to this verification's
+  // artifact URL. Future runs will diff against it.
+  const isVisual = ["screenshot", "visual_diff"].includes(verification.kind);
+  const hasArtifact = !!verification.artifact_url;
+  if (isVisual && hasArtifact && ctx.specID && ctx.criterion) {
+    const isCurrent = (ctx.criterion.sensor_spec || {}).baseline_url === verification.artifact_url;
+    const baselineBtn = el("button", { class: "secondary" },
+      isCurrent ? "Already the baseline" : "Set as baseline");
+    if (isCurrent) baselineBtn.disabled = true;
+    baselineBtn.addEventListener("click", async () => {
+      try {
+        const spec = (await get(`/api/projects/${pid}/specs/${ctx.specID}`)).spec;
+        const updated = (spec.acceptance_criteria || []).map((c) =>
+          c.id === ctx.criterion.id
+            ? { ...c, sensor_spec: { ...(c.sensor_spec || {}), baseline_url: verification.artifact_url } }
+            : c);
+        await patch(`/api/projects/${pid}/specs/${ctx.specID}`, { acceptance_criteria: updated });
+        toast("Baseline saved — future runs will diff against this image");
+        baselineBtn.textContent = "Already the baseline";
+        baselineBtn.disabled = true;
+      } catch (err) { toast(err.message, "error"); }
+    });
+    headerActions.appendChild(baselineBtn);
+  }
+
+  headerActions.appendChild(el("button", { class: "secondary", onClick: close }, "Close"));
+
   modal.appendChild(el("div", { class: "annotator-header" }, [
     el("strong", {}, `${verification.kind} — ${verification.summary || verification.id.slice(0, 8)}`),
-    el("button", { class: "secondary", onClick: close }, "Close"),
+    headerActions,
   ]));
 
   const stage = el("div", { class: "annotator-stage" });
