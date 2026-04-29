@@ -379,13 +379,22 @@ func (o *Orchestrator) runValidator(ctx context.Context, work *client.WorkItem, 
 		Fetch:        o.Client.FetchArtifact,
 	}
 
+	// Track per-criterion verdicts so we can decide whether to mark the
+	// run done or leave it in 'validating' for human review at the end.
+	verdicts := map[string]string{} // criterion_id → pass|fail|warn|skipped|manual
+
 	deterministicFired := 0
 	for _, c := range criteria {
-		if c.SensorKind == "judge" || c.SensorKind == "manual" {
-			continue // judge is handled below; manual stays human-driven.
+		if c.SensorKind == "manual" {
+			verdicts[c.ID] = "manual"
+			continue
+		}
+		if c.SensorKind == "judge" {
+			continue // judge is handled below.
 		}
 		s := o.Sensors.For(c.SensorKind)
 		if s == nil {
+			verdicts[c.ID] = "skipped"
 			if _, err := o.Client.PostVerification(ctx, work.RunID, client.PostVerificationReq{
 				CriterionID: c.ID, Kind: c.SensorKind, Class: "computational",
 				Status: "skipped", Summary: "no sensor implementation for kind " + c.SensorKind,
@@ -396,6 +405,7 @@ func (o *Orchestrator) runValidator(ctx context.Context, work *client.WorkItem, 
 		}
 		res, err := s.Run(ctx, c, env)
 		if err != nil {
+			verdicts[c.ID] = "fail"
 			if _, postErr := o.Client.PostVerification(ctx, work.RunID, client.PostVerificationReq{
 				CriterionID: c.ID, Kind: c.SensorKind, Class: "computational",
 				Status: "fail", Summary: "sensor error: " + err.Error(),
@@ -404,6 +414,7 @@ func (o *Orchestrator) runValidator(ctx context.Context, work *client.WorkItem, 
 			}
 			continue
 		}
+		verdicts[c.ID] = res.Status
 		if err := o.postSensorResult(ctx, work.RunID, c, res); err != nil {
 			log.Printf("validator: post sensor: %v", err)
 		}
@@ -449,6 +460,7 @@ func (o *Orchestrator) runValidator(ctx context.Context, work *client.WorkItem, 
 					log.Printf("judge: parse JSON: %v (raw=%q)", err, raw)
 				} else {
 					for _, v := range parsed.Verdicts {
+						verdicts[v.CriterionID] = v.Status
 						if _, err := o.Client.PostVerification(ctx, work.RunID, client.PostVerificationReq{
 							CriterionID: v.CriterionID, Kind: "judge", Class: "inferential",
 							Status: v.Status, Summary: v.Summary,
@@ -461,21 +473,47 @@ func (o *Orchestrator) runValidator(ctx context.Context, work *client.WorkItem, 
 		}
 	}
 
+	// Decide whether the run is actually finished or whether it should
+	// stay parked in 'validating' for human review. A run is "done" only
+	// when every criterion has a passing verdict. Anything else (fail,
+	// warn, manual, skipped) blocks the auto-finish: humans look at the
+	// sensor grid and either post fix_required annotations (which the
+	// corrector phase picks up) or override individual verifications via
+	// PATCH. Marking those runs done unconditionally — which is what the
+	// orchestrator did before this commit — produced false-positive
+	// validated specs whose criteria were never actually satisfied.
+	allPass := true
+	pending := []string{}
+	for _, c := range criteria {
+		v, ok := verdicts[c.ID]
+		if !ok || v != "pass" {
+			allPass = false
+			pending = append(pending, fmt.Sprintf("%s=%s", c.SensorKind, v))
+		}
+	}
+
 	summary := fmt.Sprintf("Ran %d deterministic sensors", deterministicFired)
 	if hasJudge {
-		summary += " + judge pass"
+		summary += " + judge"
+	}
+	if allPass {
+		summary += "; all criteria passed"
+	} else {
+		summary += "; awaiting human review (" + strings.Join(pending, ", ") + ")"
 	}
 	if _, err := o.postIteration(ctx, work.RunID, "validate", "validator", summary, judgeResp); err != nil {
 		return err
 	}
 
-	// Default behaviour: stop after one validation cycle. Humans review the
-	// sensor grid; a fix_required annotation flips the run into
-	// 'correcting' (see store.CreateAnnotation) and the corrector phase
-	// claim becomes available on the next runner poll.
-	return o.Client.Advance(ctx, work.RunID, client.AdvanceRequest{
-		RunnerID: o.RunnerID, FromPhase: "validate", FinalStatus: "done",
-	})
+	advance := client.AdvanceRequest{RunnerID: o.RunnerID, FromPhase: "validate"}
+	if allPass {
+		advance.FinalStatus = "done"
+	}
+	// When not all-pass, we close the work_queue item but leave the run
+	// in 'validating' status (no FinalStatus, no toPhase). The fix-loop
+	// resumes when a human posts a fix_required annotation, which
+	// enqueues a 'correct' work item via store.CreateAnnotation.
+	return o.Client.Advance(ctx, work.RunID, advance)
 }
 
 // postSensorResult uploads the artifact (if any) and posts the verification.
