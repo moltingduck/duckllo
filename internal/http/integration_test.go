@@ -744,6 +744,33 @@ func (e *testEnv) runRunnerThroughValidate(t *testing.T, specID string) (runID, 
 	return rid, claim.WorkItem["phase"].(string)
 }
 
+// TestSpecApproval_RequiresAtLeastOneCriterion locks in the gate
+// added on approve: a spec with zero acceptance criteria can't be
+// approved, because the resulting run would do nothing meaningful
+// (validator posts no verifications, judge doesn't fire, run
+// auto-advances to validated with no signal).
+func TestSpecApproval_RequiresAtLeastOneCriterion(t *testing.T) {
+	e := setupTestEnv(t)
+
+	var spec map[string]any
+	e.c.do("POST", "/api/projects/"+e.pid+"/specs", e.c.token,
+		map[string]any{"title": "empty spec", "intent": "x"}, &spec, http.StatusCreated)
+	sid := spec["id"].(string)
+
+	// Approve must reject: 400.
+	res := e.c.raw("POST", "/api/projects/"+e.pid+"/specs/"+sid+"/approve", e.c.token, nil)
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusBadRequest {
+		body, _ := io.ReadAll(res.Body)
+		t.Fatalf("expected 400, got %d: %s", res.StatusCode, body)
+	}
+
+	// Add a criterion, retry approve — succeeds.
+	e.c.do("POST", "/api/projects/"+e.pid+"/specs/"+sid+"/criteria", e.c.token,
+		map[string]any{"text": "must hold", "sensor_kind": "judge"}, nil, http.StatusOK)
+	e.c.do("POST", "/api/projects/"+e.pid+"/specs/"+sid+"/approve", e.c.token, nil, nil, http.StatusOK)
+}
+
 // TestIterationTranscriptRoundTrip locks in the column added in
 // migration 007. Posting an iteration with a `transcript` field and
 // then GETting the run's iterations must surface the same text back.

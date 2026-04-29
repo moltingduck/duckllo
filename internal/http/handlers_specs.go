@@ -169,12 +169,26 @@ func (s *Server) handleApproveSpec(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	// Empty acceptance_criteria → meaningless run. The validator would
+	// post zero verifications, the judge wouldn't fire, and the spec
+	// would auto-advance to validated with no human or sensor signal
+	// it was actually correct. Block at the approval boundary so the
+	// PM either adds criteria or rejects the spec outright.
+	var crits []models.AcceptanceCriterion
+	_ = json.Unmarshal(spec.AcceptanceCriteria, &crits)
+	if len(crits) == 0 {
+		writeError(w, http.StatusBadRequest,
+			"spec has no acceptance criteria — add at least one before approving")
+		return
+	}
+
 	st := store.New(s.pool)
 	updated, err := st.UpdateSpec(r.Context(), spec.ID, store.SpecPatch{Status: ptr("approved")})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	s.publish(r, "spec.updated", updated)
 	writeJSON(w, http.StatusOK, updated)
 }
 
