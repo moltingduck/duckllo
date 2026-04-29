@@ -99,7 +99,7 @@ export async function openAnnotator(pid, verification, ctx = {}) {
   window.addEventListener("resize", syncCanvas);
   syncCanvas();
 
-  const ctx = canvas.getContext("2d");
+  const c2d = canvas.getContext("2d");
 
   // Drawing state.
   let drawing = false, startX = 0, startY = 0, currentBox = null;
@@ -144,35 +144,35 @@ export async function openAnnotator(pid, verification, ctx = {}) {
   }
 
   function drawAnnotations() {
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    c2d.clearRect(0, 0, canvas.width, canvas.height);
     for (const a of existingAnnos) {
       const b = imgToCanvas(parseBbox(a.bbox));
-      ctx.lineWidth = 2;
-      ctx.strokeStyle = colorFor(a.verdict);
-      ctx.fillStyle = colorFor(a.verdict, 0.15);
-      ctx.strokeRect(b.x, b.y, b.w, b.h);
-      ctx.fillRect(b.x, b.y, b.w, b.h);
+      c2d.lineWidth = 2;
+      c2d.strokeStyle = colorFor(a.verdict);
+      c2d.fillStyle = colorFor(a.verdict, 0.15);
+      c2d.strokeRect(b.x, b.y, b.w, b.h);
+      c2d.fillRect(b.x, b.y, b.w, b.h);
       drawLabel(b, labelFor(a));
     }
     if (currentBox) {
-      ctx.lineWidth = 2;
-      ctx.strokeStyle = "#58a6ff";
-      ctx.setLineDash([6, 4]);
-      ctx.strokeRect(currentBox.x, currentBox.y, currentBox.w, currentBox.h);
-      ctx.setLineDash([]);
+      c2d.lineWidth = 2;
+      c2d.strokeStyle = "#58a6ff";
+      c2d.setLineDash([6, 4]);
+      c2d.strokeRect(currentBox.x, currentBox.y, currentBox.w, currentBox.h);
+      c2d.setLineDash([]);
     }
   }
 
   function drawLabel(b, text) {
-    ctx.font = "11px ui-monospace, Menlo, monospace";
+    c2d.font = "11px ui-monospace, Menlo, monospace";
     const padding = 4;
-    const m = ctx.measureText(text);
+    const m = c2d.measureText(text);
     const w = m.width + padding * 2;
     const h = 16;
-    ctx.fillStyle = "rgba(0,0,0,0.7)";
-    ctx.fillRect(b.x, Math.max(b.y - h, 0), w, h);
-    ctx.fillStyle = "white";
-    ctx.fillText(text, b.x + padding, Math.max(b.y - 4, 12));
+    c2d.fillStyle = "rgba(0,0,0,0.7)";
+    c2d.fillRect(b.x, Math.max(b.y - h, 0), w, h);
+    c2d.fillStyle = "white";
+    c2d.fillText(text, b.x + padding, Math.max(b.y - 4, 12));
   }
 
   function colorFor(verdict, alpha = 1) {
