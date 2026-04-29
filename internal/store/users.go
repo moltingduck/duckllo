@@ -12,6 +12,12 @@ import (
 
 var ErrNotFound = errors.New("not found")
 
+// ErrSpecNotEnqueueable is returned by EnqueueRun when the spec isn't in
+// 'approved' status — typically because it's still draft, was rejected,
+// or already has a run in flight that drove it to 'running'/'validated'.
+// Callers map this to HTTP 400 so the user gets a clear error.
+var ErrSpecNotEnqueueable = errors.New("spec is not in 'approved' status")
+
 func (s *Store) CreateUser(ctx context.Context, username, passwordHash, displayName, role string) (*models.User, error) {
 	row := s.Pool.QueryRow(ctx, `
 		INSERT INTO users (username, password_hash, display_name, system_role)

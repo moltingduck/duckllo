@@ -930,6 +930,51 @@ func TestPlanApproval_AgentCanApproveOwnPlan(t *testing.T) {
 		nil, nil, http.StatusOK)
 }
 
+// TestEnqueueRun_GatedOnApprovedStatus locks in the atomic gate added
+// to EnqueueRun. Prior to the fix, POST /specs/{sid}/runs would happily
+// create a second run on an already-running spec — two runners would
+// then race against the same workspace and post conflicting
+// verifications. It would also accept a run on a draft spec, which is
+// nonsensical because the criteria contract isn't frozen yet. The fix
+// gates the spec → run transition with
+//
+//	UPDATE specs SET status='running' WHERE id=$1 AND status='approved'
+//
+// inside the EnqueueRun transaction. Concurrent or repeat callers see
+// 0 rows and get ErrSpecNotEnqueueable → HTTP 400.
+func TestEnqueueRun_GatedOnApprovedStatus(t *testing.T) {
+	e := setupTestEnv(t)
+
+	// Draft spec must not be enqueueable.
+	var spec map[string]any
+	e.c.do("POST", "/api/projects/"+e.pid+"/specs", e.c.token,
+		map[string]any{"title": "gate test", "intent": "x"}, &spec, http.StatusCreated)
+	sid := spec["id"].(string)
+	res := e.c.raw("POST", "/api/projects/"+e.pid+"/specs/"+sid+"/runs", e.c.token, map[string]any{})
+	if res.StatusCode != http.StatusBadRequest {
+		body, _ := io.ReadAll(res.Body)
+		res.Body.Close()
+		t.Fatalf("draft-spec run: got %d: %s", res.StatusCode, body)
+	}
+	res.Body.Close()
+
+	// Approve and the first run goes through.
+	e.c.do("POST", "/api/projects/"+e.pid+"/specs/"+sid+"/criteria", e.c.token,
+		map[string]any{"text": "ok", "sensor_kind": "judge"}, nil, http.StatusOK)
+	e.c.do("POST", "/api/projects/"+e.pid+"/specs/"+sid+"/approve", e.c.token, nil, nil, http.StatusOK)
+	e.c.do("POST", "/api/projects/"+e.pid+"/specs/"+sid+"/runs", e.c.token,
+		map[string]any{}, nil, http.StatusCreated)
+
+	// A second run on the now-running spec must be rejected.
+	res2 := e.c.raw("POST", "/api/projects/"+e.pid+"/specs/"+sid+"/runs", e.c.token, map[string]any{})
+	if res2.StatusCode != http.StatusBadRequest {
+		body, _ := io.ReadAll(res2.Body)
+		res2.Body.Close()
+		t.Fatalf("second run on running spec: got %d: %s", res2.StatusCode, body)
+	}
+	res2.Body.Close()
+}
+
 // TestClaimWork_RespectsPhaseFilterForPendingItems locks in the SQL
 // precedence fix on ClaimWork. The original WHERE clause was
 //

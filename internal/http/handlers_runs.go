@@ -56,6 +56,11 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	// If still no plan, the run starts in 'plan' phase and the planner
 	// agent will draft+approve a plan as its first iteration.
 	run, err := st.EnqueueRun(r.Context(), spec.ID, planPtr, req.TurnBudget)
+	if errors.Is(err, store.ErrSpecNotEnqueueable) {
+		writeError(w, http.StatusBadRequest,
+			"spec is not in 'approved' status — approve it first, or wait for the in-flight run to finish")
+		return
+	}
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return

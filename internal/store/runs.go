@@ -17,6 +17,14 @@ const runLockTTL = 90 * time.Second
 // approved plan. If planID is the zero UUID, the run starts in the 'plan'
 // phase and the planner agent owns the first iteration; once it approves
 // a new plan, SetRunPlan binds the run to it.
+//
+// The spec MUST currently be in status='approved'. The transition to
+// 'running' is an atomic UPDATE WHERE status='approved' RETURNING — so
+// two concurrent POST /runs against the same spec serialise: only one
+// flips the status and creates the run; the other gets ErrSpecNotEnqueueable.
+// Without this gate the runner would see two competing runs editing the
+// same workspace, posting conflicting verifications, and racing on the
+// work_queue.
 func (s *Store) EnqueueRun(ctx context.Context, specID uuid.UUID, planID *uuid.UUID, turnBudget int) (*models.Run, error) {
 	if turnBudget <= 0 {
 		turnBudget = 50
@@ -26,6 +34,21 @@ func (s *Store) EnqueueRun(ctx context.Context, specID uuid.UUID, planID *uuid.U
 		return nil, err
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck
+
+	// Atomic gate: only an 'approved' spec can spawn a run, and the same
+	// statement transitions it to 'running' so a concurrent caller fails.
+	var dummy uuid.UUID
+	err = tx.QueryRow(ctx, `
+		UPDATE specs SET status = 'running', updated_at = NOW()
+		WHERE id = $1 AND status = 'approved'
+		RETURNING id
+	`, specID).Scan(&dummy)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrSpecNotEnqueueable
+	}
+	if err != nil {
+		return nil, err
+	}
 
 	var run models.Run
 	if err := tx.QueryRow(ctx, `
@@ -51,13 +74,6 @@ func (s *Store) EnqueueRun(ctx context.Context, specID uuid.UUID, planID *uuid.U
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO work_queue (run_id, phase, status) VALUES ($1, $2, 'pending')
 	`, run.ID, startPhase); err != nil {
-		return nil, err
-	}
-
-	// Set the spec to 'running'.
-	if _, err := tx.Exec(ctx, `
-		UPDATE specs SET status = 'running', updated_at = NOW() WHERE id = $1
-	`, specID); err != nil {
 		return nil, err
 	}
 
