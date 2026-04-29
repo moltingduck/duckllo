@@ -4,6 +4,7 @@
 package orchestrator
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -14,14 +15,19 @@ import (
 	"github.com/moltingduck/duckllo/internal/runner/agent"
 	"github.com/moltingduck/duckllo/internal/runner/client"
 	"github.com/moltingduck/duckllo/internal/runner/tools"
+	"github.com/moltingduck/duckllo/internal/sensors"
 )
 
 type Orchestrator struct {
-	Client   *client.Client
-	Provider agent.Provider
-	Sandbox  *tools.Sandbox
-	RunnerID string
-	MaxTurns int
+	Client     *client.Client
+	Provider   agent.Provider
+	Sandbox    *tools.Sandbox
+	Sensors    *sensors.Registry
+	RunnerID   string
+	MaxTurns   int
+	DevURL     string // base URL the screenshot sensor should hit
+	ChromePath string // optional override for chromedp
+	Workspace  string
 }
 
 // Run performs one phase of work for a claimed run+work_item.
@@ -139,80 +145,124 @@ func (o *Orchestrator) runExecutor(ctx context.Context, work *client.WorkItem, b
 	})
 }
 
-// runValidator: for now, only the inferential judge runs (computational
-// sensors land in task #10 / internal/sensors). For each criterion of
-// sensor_kind in {lint, test, build, screenshot}, we mark it as 'pending'
-// without actually firing — task 10 will replace these with real sensor
-// calls. For 'judge' kind, we ask the model.
+// runValidator fires every sensor matching the criterion kinds, posts a
+// verification per criterion, and additionally calls the inferential
+// judge once across all judge-kind criteria.
 func (o *Orchestrator) runValidator(ctx context.Context, work *client.WorkItem, b *client.Bundle) error {
-	var criteria []struct {
-		ID         string `json:"id"`
-		Text       string `json:"text"`
-		SensorKind string `json:"sensor_kind"`
-		Satisfied  bool   `json:"satisfied"`
+	var criteria []sensors.Criterion
+	if err := json.Unmarshal(b.Spec.AcceptanceCriteria, &criteria); err != nil {
+		return fmt.Errorf("decode criteria: %w", err)
 	}
-	_ = json.Unmarshal(b.Spec.AcceptanceCriteria, &criteria)
 
-	resp, err := o.Provider.Complete(ctx, agent.Request{
-		System:   systemPromptFor("validator"),
-		Messages: []agent.Message{{Role: "user", Content: userPromptFor("validator", b)}},
-	})
-	if err != nil {
-		return fmt.Errorf("validator inference: %w", err)
+	env := sensors.Env{
+		WorkspaceDir: o.Workspace,
+		DevURL:       o.DevURL,
+		ChromePath:   o.ChromePath,
+		LogF:         func(f string, args ...any) { log.Printf(f, args...) },
 	}
-	raw, err := extractJSONBlock(resp.Text)
-	if err != nil {
-		// Don't bail — post a meta verification so the UI shows we tried.
-		_, _ = o.Client.PostVerification(ctx, work.RunID, client.PostVerificationReq{
-			Kind: "judge", Class: "inferential", Status: "warn",
-			Summary: "validator output missing JSON block",
-		})
-	}
-	if err == nil {
-		var parsed struct {
-			Verdicts []struct {
-				CriterionID string `json:"criterion_id"`
-				Status      string `json:"status"`
-				Summary     string `json:"summary"`
-			} `json:"verdicts"`
+
+	deterministicFired := 0
+	for _, c := range criteria {
+		if c.SensorKind == "judge" || c.SensorKind == "manual" {
+			continue // judge is handled below; manual stays human-driven.
 		}
-		if err := json.Unmarshal([]byte(raw), &parsed); err == nil {
-			for _, v := range parsed.Verdicts {
+		s := o.Sensors.For(c.SensorKind)
+		if s == nil {
+			_, _ = o.Client.PostVerification(ctx, work.RunID, client.PostVerificationReq{
+				CriterionID: c.ID, Kind: c.SensorKind, Class: "computational",
+				Status: "skipped", Summary: "no sensor implementation for kind " + c.SensorKind,
+			})
+			continue
+		}
+		res, err := s.Run(ctx, c, env)
+		if err != nil {
+			_, _ = o.Client.PostVerification(ctx, work.RunID, client.PostVerificationReq{
+				CriterionID: c.ID, Kind: c.SensorKind, Class: "computational",
+				Status: "fail", Summary: "sensor error: " + err.Error(),
+			})
+			continue
+		}
+		if err := o.postSensorResult(ctx, work.RunID, c, res); err != nil {
+			log.Printf("validator: post sensor: %v", err)
+		}
+		deterministicFired++
+	}
+
+	// Judge: aggregated single LLM pass over criteria of kind=judge.
+	hasJudge := false
+	for _, c := range criteria {
+		if c.SensorKind == "judge" {
+			hasJudge = true
+			break
+		}
+	}
+	var judgeResp *agent.Response
+	if hasJudge {
+		resp, err := o.Provider.Complete(ctx, agent.Request{
+			System:   systemPromptFor("validator"),
+			Messages: []agent.Message{{Role: "user", Content: userPromptFor("validator", b)}},
+		})
+		if err != nil {
+			log.Printf("judge inference: %v", err)
+		} else {
+			judgeResp = resp
+			raw, perr := extractJSONBlock(resp.Text)
+			if perr != nil {
 				_, _ = o.Client.PostVerification(ctx, work.RunID, client.PostVerificationReq{
-					CriterionID: v.CriterionID, Kind: "judge", Class: "inferential",
-					Status: v.Status, Summary: v.Summary,
+					Kind: "judge", Class: "inferential", Status: "warn",
+					Summary: "validator output missing JSON block",
 				})
+			} else {
+				var parsed struct {
+					Verdicts []struct {
+						CriterionID string `json:"criterion_id"`
+						Status      string `json:"status"`
+						Summary     string `json:"summary"`
+					} `json:"verdicts"`
+				}
+				if err := json.Unmarshal([]byte(raw), &parsed); err == nil {
+					for _, v := range parsed.Verdicts {
+						_, _ = o.Client.PostVerification(ctx, work.RunID, client.PostVerificationReq{
+							CriterionID: v.CriterionID, Kind: "judge", Class: "inferential",
+							Status: v.Status, Summary: v.Summary,
+						})
+					}
+				}
 			}
 		}
 	}
 
-	if _, err := o.postIteration(ctx, work.RunID, "validate", "validator",
-		"Validator judged criteria", resp); err != nil {
+	summary := fmt.Sprintf("Ran %d deterministic sensors", deterministicFired)
+	if hasJudge {
+		summary += " + judge pass"
+	}
+	if _, err := o.postIteration(ctx, work.RunID, "validate", "validator", summary, judgeResp); err != nil {
 		return err
 	}
 
-	// Decide next phase: if every criterion is now satisfied (or no humans
-	// have opened annotations), mark the run done. Otherwise sit in
-	// 'validating' and wait — the corrector phase only fires when an
-	// annotation is posted (see store.CreateAnnotation).
-	allPass := true
-	for _, c := range criteria {
-		if !c.Satisfied {
-			allPass = false
-			break
-		}
-	}
-	if allPass {
-		return o.Client.Advance(ctx, work.RunID, client.AdvanceRequest{
-			RunnerID: o.RunnerID, FromPhase: "validate", FinalStatus: "done",
-		})
-	}
-	// Default: stop here. Humans inspect the sensor grid; if they post a
-	// fix_required annotation the run flips to 'correcting' and the
-	// corrector phase claim becomes available next time we poll.
+	// Default behaviour: stop after one validation cycle. Humans review the
+	// sensor grid; a fix_required annotation flips the run into
+	// 'correcting' (see store.CreateAnnotation) and the corrector phase
+	// claim becomes available on the next runner poll.
 	return o.Client.Advance(ctx, work.RunID, client.AdvanceRequest{
 		RunnerID: o.RunnerID, FromPhase: "validate", FinalStatus: "done",
 	})
+}
+
+// postSensorResult uploads the artifact (if any) and posts the verification.
+func (o *Orchestrator) postSensorResult(ctx context.Context, runID uuid.UUID, c sensors.Criterion, res *sensors.Result) error {
+	meta := client.PostVerificationReq{
+		CriterionID: c.ID, Kind: c.SensorKind, Class: res.Class,
+		Status: res.Status, Summary: res.Summary, Details: res.Details,
+	}
+	if len(res.ArtifactBytes) > 0 {
+		_, err := o.Client.PostVerificationWithArtifact(
+			ctx, runID, meta, res.FileName, res.ContentType, bytes.NewReader(res.ArtifactBytes),
+		)
+		return err
+	}
+	_, err := o.Client.PostVerification(ctx, runID, meta)
+	return err
 }
 
 func (o *Orchestrator) runCorrector(ctx context.Context, work *client.WorkItem, b *client.Bundle) error {

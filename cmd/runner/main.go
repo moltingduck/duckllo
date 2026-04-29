@@ -27,6 +27,7 @@ import (
 	"github.com/moltingduck/duckllo/internal/runner/client"
 	"github.com/moltingduck/duckllo/internal/runner/orchestrator"
 	"github.com/moltingduck/duckllo/internal/runner/tools"
+	"github.com/moltingduck/duckllo/internal/sensors"
 )
 
 func main() {
@@ -41,6 +42,8 @@ func main() {
 		anthropic   = flag.String("anthropic-key", os.Getenv("ANTHROPIC_API_KEY"), "Anthropic API key")
 		intervalSec = flag.Int("poll-interval", 5, "seconds between empty-claim retries")
 		once        = flag.Bool("once", false, "claim and process exactly one work item then exit")
+		devURL      = flag.String("dev-url", env("DUCKLLO_DEV_URL", ""), "base URL of the dev server, used by screenshot sensor")
+		chromePath  = flag.String("chrome-path", env("DUCKLLO_CHROME_PATH", ""), "override Chrome/Chromium binary path")
 	)
 	flag.Parse()
 
@@ -68,7 +71,13 @@ func main() {
 	sandbox := tools.NewSandbox(*workspace)
 
 	o := &orchestrator.Orchestrator{
-		Client: c, Provider: prov, Sandbox: sandbox, RunnerID: *runnerID, MaxTurns: 12,
+		Client: c, Provider: prov, Sandbox: sandbox,
+		Sensors:    sensors.DefaultRegistry(),
+		RunnerID:   *runnerID,
+		MaxTurns:   12,
+		DevURL:     *devURL,
+		ChromePath: *chromePath,
+		Workspace:  *workspace,
 	}
 
 	log.Printf("runner %s up — url=%s project=%s roles=%v workspace=%s model=%s",
