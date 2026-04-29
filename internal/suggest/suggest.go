@@ -24,15 +24,24 @@ type SuggestedCriterion struct {
 	SensorKind string `json:"sensor_kind"`
 }
 
+// Question is one clarifying prompt with optional click-to-select
+// answer choices. `options` is empty when the question is genuinely
+// open-ended (e.g. "what's the keyboard shortcut?"); when present, the
+// UI renders each as a button so the user doesn't have to type.
+type Question struct {
+	Question string   `json:"question"`
+	Options  []string `json:"options"`
+}
+
 // RefinedDraft is what /refine returns: the model's tightened version of
 // the user's title + intent, plus 2-4 clarifying questions whose answers
 // would meaningfully change the acceptance criteria. The UI shows the
 // refined fields as editable inputs (the user can accept, edit, or
 // reject them) and renders the questions as answer-row prompts.
 type RefinedDraft struct {
-	RefinedTitle  string   `json:"refined_title"`
-	RefinedIntent string   `json:"refined_intent"`
-	Questions     []string `json:"questions"`
+	RefinedTitle  string     `json:"refined_title"`
+	RefinedIntent string     `json:"refined_intent"`
+	Questions     []Question `json:"questions"`
 }
 
 // QA is one question + the user's answer, used as additional context on
@@ -68,13 +77,23 @@ You receive a draft title and intent. Two jobs:
    already answered by the intent. If you genuinely have nothing to
    ask, return an empty questions array.
 
+   Each question SHOULD include 2-4 short answer "options" the user can
+   click to select instead of typing — yes/no, or named alternatives.
+   Phrase the options as full answers ("Per device, in localStorage",
+   "Synced per account") not single words. Use an empty options array
+   only when the question is genuinely open-ended (e.g. "what's the
+   keyboard shortcut?").
+
 Output ONLY a single fenced JSON block of this shape, no prose around it:
 
 ` + "```" + `json
 {
   "refined_title": "…",
   "refined_intent": "…",
-  "questions": ["…", "…"]
+  "questions": [
+    {"question": "…", "options": ["…", "…"]},
+    {"question": "…", "options": []}
+  ]
 }
 ` + "```"
 
@@ -133,12 +152,21 @@ func Refine(ctx context.Context, p agent.Provider, title, intent string) (*Refin
 	}
 	parsed.RefinedTitle = strings.TrimSpace(parsed.RefinedTitle)
 	parsed.RefinedIntent = strings.TrimSpace(parsed.RefinedIntent)
-	// Drop empty / whitespace-only questions so the UI doesn't render blanks.
-	clean := make([]string, 0, len(parsed.Questions))
+	// Drop empty / whitespace-only questions so the UI doesn't render
+	// blanks. Same for option strings.
+	clean := make([]Question, 0, len(parsed.Questions))
 	for _, q := range parsed.Questions {
-		if q = strings.TrimSpace(q); q != "" {
-			clean = append(clean, q)
+		text := strings.TrimSpace(q.Question)
+		if text == "" {
+			continue
 		}
+		opts := make([]string, 0, len(q.Options))
+		for _, o := range q.Options {
+			if o = strings.TrimSpace(o); o != "" {
+				opts = append(opts, o)
+			}
+		}
+		clean = append(clean, Question{Question: text, Options: opts})
 	}
 	parsed.Questions = clean
 	// If the model returned nothing useful, fall back to the user's draft.

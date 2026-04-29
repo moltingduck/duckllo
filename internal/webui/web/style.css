@@ -64,6 +64,19 @@ button.secondary, .btn.secondary {
 button.danger, .btn.danger { background: var(--fail); border-color: var(--fail); }
 button:disabled { opacity: 0.5; cursor: not-allowed; }
 
+/* Suggest-panel answer chips: clickable pills the user picks from
+   instead of typing. Active state mirrors the chosen option back into
+   the textarea so a follow-up click can swap selection. */
+button.chip {
+  font-size: 12px; padding: 4px 10px; border-radius: 12px;
+  background: transparent; border: 1px solid var(--border); color: var(--fg-dim);
+}
+button.chip:hover { color: var(--fg); border-color: var(--accent-dim); }
+button.chip.active {
+  background: var(--accent-dim); border-color: var(--accent-dim); color: white;
+}
+.question { margin: 12px 0 4px; font-weight: 500; }
+
 input[type=text], input[type=password], input[type=email], textarea, select {
   font: inherit; padding: 6px 10px; border-radius: 5px;
   background: var(--bg-card); color: var(--fg); border: 1px solid var(--border);

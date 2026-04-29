@@ -90,33 +90,45 @@ export async function render(mount, params) {
     refinePanel.appendChild(el("h3", { style: "margin-top:0" },
       "Refined draft + clarifying questions"));
     refinePanel.appendChild(el("p", { class: "muted" },
-      "Edit the refined fields if you like, answer the questions, then generate criteria."));
+      "Edit the refined fields if you like, answer the questions (click a chip or type), then generate. Generating also writes the refined title + intent back to the form above."));
 
     const refinedTitle = el("input", { type: "text", value: refined.refined_title || "" });
     const refinedIntent = el("textarea", { rows: "4" }, refined.refined_intent || "");
-    const applyBtn = el("button", { class: "secondary" }, "Apply refined draft to my form");
-    applyBtn.addEventListener("click", () => {
-      titleInput.value = refinedTitle.value;
-      intentInput.value = refinedIntent.value;
-      toast("Title and intent updated — edit further or generate criteria");
-    });
 
     refinePanel.appendChild(el("label", {}, "Refined title"));
     refinePanel.appendChild(refinedTitle);
     refinePanel.appendChild(el("label", {}, "Refined intent"));
     refinePanel.appendChild(refinedIntent);
-    refinePanel.appendChild(el("div", { class: "row", style: "gap:8px;margin-top:6px" },
-      [applyBtn]));
 
-    const questions = (refined.questions || []).filter((q) => typeof q === "string" && q.trim());
+    // Each refined question is rendered as: prompt + (optional) row of
+    // clickable answer chips + free-text textarea. Clicking a chip
+    // writes its text into the textarea (and toggles a selected style);
+    // the user can still type their own. We always read the answer
+    // from the textarea so chip + custom text is one input path.
+    const questions = (refined.questions || []).filter(
+      (q) => q && typeof q.question === "string" && q.question.trim());
     const answerEls = [];
     if (questions.length > 0) {
       refinePanel.appendChild(el("h4", { style: "margin-top:14px" }, "Questions"));
       questions.forEach((q) => {
-        refinePanel.appendChild(el("p", { class: "question" }, q));
-        const a = el("textarea", { rows: "2", placeholder: "Your answer…" });
+        refinePanel.appendChild(el("p", { class: "question" }, q.question));
+        const a = el("textarea", { rows: "2", placeholder: "Click a chip below or type your answer…" });
+        const opts = (q.options || []).filter((o) => typeof o === "string" && o.trim());
+        if (opts.length > 0) {
+          const chips = el("div", { class: "row", style: "gap:6px;flex-wrap:wrap;margin-bottom:6px" });
+          opts.forEach((o) => {
+            const chip = el("button", { class: "secondary chip", type: "button" }, o);
+            chip.addEventListener("click", () => {
+              a.value = o;
+              chips.querySelectorAll("button").forEach((b) => b.classList.remove("active"));
+              chip.classList.add("active");
+            });
+            chips.appendChild(chip);
+          });
+          refinePanel.appendChild(chips);
+        }
         refinePanel.appendChild(a);
-        answerEls.push({ q, a });
+        answerEls.push({ q: q.question, a });
       });
     } else {
       refinePanel.appendChild(el("p", { class: "muted",
@@ -124,10 +136,12 @@ export async function render(mount, params) {
         "The model didn't have any clarifying questions — go ahead and generate criteria."));
     }
 
-    const genBtn = el("button", {}, "Generate criteria");
+    // Single combined action: applies the refined draft to the form
+    // above AND generates criteria from (refined title + intent + qa).
+    const genBtn = el("button", {}, "Apply refined draft + generate criteria");
     genBtn.addEventListener("click", async () => {
-      const t = (refinedTitle.value || titleInput.value).trim();
-      const i = (refinedIntent.value || intentInput.value).trim();
+      const t = refinedTitle.value.trim();
+      const i = refinedIntent.value.trim();
       if (!t) return toast("Refined title is empty", "error");
       const qa = answerEls
         .map(({ q, a }) => ({ q, a: a.value.trim() }))
@@ -138,6 +152,9 @@ export async function render(mount, params) {
         const resp = await api(`/api/projects/${params.pid}/specs/suggest`, {
           method: "POST", body: { title: t, intent: i, qa } });
         const added = (resp.criteria || []).filter((s) => s.text && s.sensor_kind);
+        // Apply refined draft to the form regardless — that's part of the action.
+        titleInput.value = t;
+        intentInput.value = i;
         if (added.length === 0) {
           toast("Model returned nothing usable", "error");
           return;
@@ -146,12 +163,13 @@ export async function render(mount, params) {
           criteria.push({ id: genID(), text: s.text, sensor_kind: s.sensor_kind });
         }
         renderCriteria();
-        toast(`Added ${added.length} suggestion${added.length === 1 ? "" : "s"} — review and edit`);
+        toast(`Applied draft + added ${added.length} criteria — review and edit`);
+        refinePanel.style.display = "none";
       } catch (err) {
         toast(err.message, "error");
       } finally {
         genBtn.disabled = false;
-        genBtn.textContent = "Generate criteria";
+        genBtn.textContent = "Apply refined draft + generate criteria";
       }
     });
     const dismissBtn = el("button", { class: "secondary" }, "Dismiss");
