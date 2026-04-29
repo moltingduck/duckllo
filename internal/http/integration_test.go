@@ -743,3 +743,77 @@ func (e *testEnv) runRunnerThroughValidate(t *testing.T, specID string) (runID, 
 		&claim, http.StatusOK)
 	return rid, claim.WorkItem["phase"].(string)
 }
+
+// TestPlanApproval_AgentCanApproveOwnPlan locks in the fix shipped in
+// commit 28ae6eb: an authenticated principal (typically an API-key
+// agent acting as the planner) is allowed to approve a plan they
+// created. Without this the dogfood loop stalled — runs proceeded with
+// unapproved plans because the orchestrator log-and-continued past the
+// 403.
+func TestPlanApproval_AgentCanApproveOwnPlan(t *testing.T) {
+	e := setupTestEnv(t)
+
+	// Spec, draft plan, all via the API key (agent role).
+	var spec map[string]any
+	e.c.do("POST", "/api/projects/"+e.pid+"/specs", e.apiKey,
+		map[string]any{"title": "agent plan test", "intent": "x"}, &spec, http.StatusCreated)
+	sid := spec["id"].(string)
+
+	var plan map[string]any
+	e.c.do("POST", "/api/projects/"+e.pid+"/specs/"+sid+"/plans", e.apiKey,
+		map[string]any{"created_by_role": "planner",
+			"steps": []map[string]any{{"id": "s1", "order": 1, "summary": "x"}}},
+		&plan, http.StatusCreated)
+	pid := plan["id"].(string)
+
+	// Agent approves its own plan — must succeed.
+	e.c.do("POST", "/api/projects/"+e.pid+"/plans/"+pid+"/approve", e.apiKey,
+		nil, nil, http.StatusOK)
+}
+
+// TestPlanApproval_AgentCannotApproveOthersPlan asserts the negative
+// case: an API-key agent shouldn't be able to approve a plan someone
+// else created. The product-manager gate stays on for plans you didn't
+// author.
+func TestPlanApproval_AgentCannotApproveOthersPlan(t *testing.T) {
+	e := setupTestEnv(t)
+
+	// Plan created by gin (session token).
+	var spec map[string]any
+	e.c.do("POST", "/api/projects/"+e.pid+"/specs", e.c.token,
+		map[string]any{"title": "gin's spec", "intent": "x"}, &spec, http.StatusCreated)
+	sid := spec["id"].(string)
+	var plan map[string]any
+	e.c.do("POST", "/api/projects/"+e.pid+"/specs/"+sid+"/plans", e.c.token,
+		map[string]any{"created_by_role": "human",
+			"steps": []map[string]any{{"id": "s1", "order": 1, "summary": "x"}}},
+		&plan, http.StatusCreated)
+	planID := plan["id"].(string)
+
+	// Mint a *separate* user + key whose role on the project is just
+	// "agent" (added via the project members endpoint as a regular
+	// developer-equivalent? Actually our API keys come with role=agent
+	// inherently, so we just use the existing e.apiKey).
+	//
+	// e.apiKey is owned by alice (the same gin-equivalent admin since
+	// alice is the first registered user). To get a real "agent
+	// approving someone else's plan" scenario we need a separate user.
+	// Register a second user "bob" who is a member of the project but
+	// not the plan's creator, and have him try to approve via API key.
+	var bobSess struct{ Token string }
+	e.c.do("POST", "/api/auth/register", "", map[string]any{
+		"username": "bob", "password": "bob-secret",
+	}, &bobSess, http.StatusCreated)
+
+	// alice (admin) adds bob to the project as a developer (not PM).
+	e.c.do("POST", "/api/projects/"+e.pid+"/members", e.c.token,
+		map[string]any{"username": "bob", "role": "developer"}, nil, http.StatusNoContent)
+
+	// bob tries to approve alice's plan via session — should be 403.
+	res := e.c.raw("POST", "/api/projects/"+e.pid+"/plans/"+planID+"/approve", bobSess.Token, nil)
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusForbidden {
+		body, _ := io.ReadAll(res.Body)
+		t.Fatalf("expected 403, got %d: %s", res.StatusCode, body)
+	}
+}
