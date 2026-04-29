@@ -24,6 +24,24 @@ type SuggestedCriterion struct {
 	SensorKind string `json:"sensor_kind"`
 }
 
+// RefinedDraft is what /refine returns: the model's tightened version of
+// the user's title + intent, plus 2-4 clarifying questions whose answers
+// would meaningfully change the acceptance criteria. The UI shows the
+// refined fields as editable inputs (the user can accept, edit, or
+// reject them) and renders the questions as answer-row prompts.
+type RefinedDraft struct {
+	RefinedTitle  string   `json:"refined_title"`
+	RefinedIntent string   `json:"refined_intent"`
+	Questions     []string `json:"questions"`
+}
+
+// QA is one question + the user's answer, used as additional context on
+// the criteria pass after the user has responded to the refine pass.
+type QA struct {
+	Q string `json:"q"`
+	A string `json:"a"`
+}
+
 // validKinds matches what the spec composer's selector exposes. Keep in
 // sync with internal/webui/web/pages/spec-new.js (SENSOR_KINDS) and the
 // sensors registry — anything we let the model emit must be a kind a
@@ -33,7 +51,34 @@ var validKinds = map[string]bool{
 	"screenshot": true, "judge": true, "manual": true,
 }
 
-const systemPrompt = `You help developers compose acceptance criteria for software change specs.
+const refineSystemPrompt = `You help a developer compose a software change spec.
+
+You receive a draft title and intent. Two jobs:
+
+1. REFINE the title and intent. Tighten the wording, make the title
+   imperative-voice and short (<= 70 chars), and rewrite the intent as
+   2-4 sentences that state the user-visible goal, the constraint, and
+   what success looks like. Don't invent scope the user didn't mention.
+   If the draft is already crisp, return it unchanged.
+
+2. ASK 2 to 4 CLARIFYING QUESTIONS whose answers would *materially*
+   change the acceptance criteria — e.g. "should the toggle persist
+   across browsers, or only this device?", "is mobile in scope?", "must
+   it work without JavaScript?". Don't ask trivia, don't ask things
+   already answered by the intent. If you genuinely have nothing to
+   ask, return an empty questions array.
+
+Output ONLY a single fenced JSON block of this shape, no prose around it:
+
+` + "```" + `json
+{
+  "refined_title": "…",
+  "refined_intent": "…",
+  "questions": ["…", "…"]
+}
+` + "```"
+
+const criteriaSystemPrompt = `You help developers compose acceptance criteria for software change specs.
 
 Given the spec's title and intent, propose 3 to 6 acceptance criteria
 that, taken together, would convince a reviewer the change is correct.
@@ -60,18 +105,78 @@ No prose before or after. The "text" field is a concise sentence (one
 clause is fine). Don't repeat the spec intent verbatim — the criterion
 should be a *check*, not a restatement of the goal.`
 
-// Criteria asks the provider to propose acceptance criteria for the
-// given title + intent. Returns the parsed list, or an error if the
-// model output couldn't be decoded into the expected shape.
-func Criteria(ctx context.Context, p agent.Provider, title, intent string) ([]SuggestedCriterion, error) {
+// Refine asks the provider to tighten the title + intent and return
+// 2-4 clarifying questions whose answers would change the acceptance
+// criteria. The UI uses this for the first step of the suggest flow:
+// the user sees the refined draft (editable) and answers the questions
+// before triggering the criteria pass.
+func Refine(ctx context.Context, p agent.Provider, title, intent string) (*RefinedDraft, error) {
 	if strings.TrimSpace(title) == "" {
 		return nil, fmt.Errorf("title is required")
 	}
-	user := fmt.Sprintf("Title: %s\n\nIntent:\n%s", title, intent)
+	user := fmt.Sprintf("Draft title: %s\n\nDraft intent:\n%s", title, intent)
+	resp, err := p.Complete(ctx, agent.Request{
+		System:    refineSystemPrompt,
+		Messages:  []agent.Message{{Role: "user", Content: user}},
+		MaxTokens: 1024,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("refine provider: %w", err)
+	}
+	raw, err := extractJSONBlock(resp.Text)
+	if err != nil {
+		return nil, fmt.Errorf("refine parse: %w (model said: %s)", err, truncate(resp.Text, 200))
+	}
+	var parsed RefinedDraft
+	if err := json.Unmarshal([]byte(raw), &parsed); err != nil {
+		return nil, fmt.Errorf("refine decode: %w", err)
+	}
+	parsed.RefinedTitle = strings.TrimSpace(parsed.RefinedTitle)
+	parsed.RefinedIntent = strings.TrimSpace(parsed.RefinedIntent)
+	// Drop empty / whitespace-only questions so the UI doesn't render blanks.
+	clean := make([]string, 0, len(parsed.Questions))
+	for _, q := range parsed.Questions {
+		if q = strings.TrimSpace(q); q != "" {
+			clean = append(clean, q)
+		}
+	}
+	parsed.Questions = clean
+	// If the model returned nothing useful, fall back to the user's draft.
+	if parsed.RefinedTitle == "" {
+		parsed.RefinedTitle = title
+	}
+	if parsed.RefinedIntent == "" {
+		parsed.RefinedIntent = intent
+	}
+	return &parsed, nil
+}
+
+// Criteria asks the provider to propose acceptance criteria for the
+// given title + intent, optionally enriched with the user's answers to
+// clarifying questions from a prior Refine call. Returns the parsed
+// list, or an error if the model output couldn't be decoded into the
+// expected shape.
+func Criteria(ctx context.Context, p agent.Provider, title, intent string, qa []QA) ([]SuggestedCriterion, error) {
+	if strings.TrimSpace(title) == "" {
+		return nil, fmt.Errorf("title is required")
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "Title: %s\n\nIntent:\n%s", title, intent)
+	if len(qa) > 0 {
+		b.WriteString("\n\nClarifications:")
+		for _, x := range qa {
+			q := strings.TrimSpace(x.Q)
+			a := strings.TrimSpace(x.A)
+			if q == "" || a == "" {
+				continue
+			}
+			fmt.Fprintf(&b, "\nQ: %s\nA: %s", q, a)
+		}
+	}
 
 	resp, err := p.Complete(ctx, agent.Request{
-		System:    systemPrompt,
-		Messages:  []agent.Message{{Role: "user", Content: user}},
+		System:    criteriaSystemPrompt,
+		Messages:  []agent.Message{{Role: "user", Content: b.String()}},
 		MaxTokens: 1024,
 	})
 	if err != nil {

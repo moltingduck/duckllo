@@ -64,32 +64,116 @@ export async function render(mount, params) {
     renderCriteria();
   });
 
-  // Suggest button: asks the LLM provider to propose 3-6 criteria from
-  // title+intent. Returns 503 (handled below) when the server has no
-  // ANTHROPIC_API_KEY configured — surface a clear toast in that case.
+  // Two-step suggest flow:
+  //   1. /refine returns a tightened title + intent and 2-4 clarifying
+  //      questions. The refine panel renders inline below the criteria
+  //      list with editable refined fields, an "Apply refined draft"
+  //      button (writes refined values back to the title/intent inputs
+  //      so the user can still edit), and answer textareas.
+  //   2. "Generate criteria" calls /suggest with the (possibly edited)
+  //      title/intent + the user's answers. Returned criteria are
+  //      appended to the criteria list as removable rows the user can
+  //      tweak before pressing Create.
+  const refinePanel = el("div", { class: "card",
+    style: "margin-top:8px;background:rgba(255,255,255,0.03);display:none" });
+
+  function showRefinePanelError(msg) {
+    refinePanel.innerHTML = "";
+    refinePanel.appendChild(el("p", { class: "error" }, msg));
+    refinePanel.style.display = "block";
+  }
+
+  function renderRefinePanel(refined) {
+    refinePanel.innerHTML = "";
+    refinePanel.style.display = "block";
+
+    refinePanel.appendChild(el("h3", { style: "margin-top:0" },
+      "Refined draft + clarifying questions"));
+    refinePanel.appendChild(el("p", { class: "muted" },
+      "Edit the refined fields if you like, answer the questions, then generate criteria."));
+
+    const refinedTitle = el("input", { type: "text", value: refined.refined_title || "" });
+    const refinedIntent = el("textarea", { rows: "4" }, refined.refined_intent || "");
+    const applyBtn = el("button", { class: "secondary" }, "Apply refined draft to my form");
+    applyBtn.addEventListener("click", () => {
+      titleInput.value = refinedTitle.value;
+      intentInput.value = refinedIntent.value;
+      toast("Title and intent updated — edit further or generate criteria");
+    });
+
+    refinePanel.appendChild(el("label", {}, "Refined title"));
+    refinePanel.appendChild(refinedTitle);
+    refinePanel.appendChild(el("label", {}, "Refined intent"));
+    refinePanel.appendChild(refinedIntent);
+    refinePanel.appendChild(el("div", { class: "row", style: "gap:8px;margin-top:6px" },
+      [applyBtn]));
+
+    const questions = (refined.questions || []).filter((q) => typeof q === "string" && q.trim());
+    const answerEls = [];
+    if (questions.length > 0) {
+      refinePanel.appendChild(el("h4", { style: "margin-top:14px" }, "Questions"));
+      questions.forEach((q) => {
+        refinePanel.appendChild(el("p", { class: "question" }, q));
+        const a = el("textarea", { rows: "2", placeholder: "Your answer…" });
+        refinePanel.appendChild(a);
+        answerEls.push({ q, a });
+      });
+    } else {
+      refinePanel.appendChild(el("p", { class: "muted",
+        style: "margin-top:14px" },
+        "The model didn't have any clarifying questions — go ahead and generate criteria."));
+    }
+
+    const genBtn = el("button", {}, "Generate criteria");
+    genBtn.addEventListener("click", async () => {
+      const t = (refinedTitle.value || titleInput.value).trim();
+      const i = (refinedIntent.value || intentInput.value).trim();
+      if (!t) return toast("Refined title is empty", "error");
+      const qa = answerEls
+        .map(({ q, a }) => ({ q, a: a.value.trim() }))
+        .filter(({ a }) => a !== "");
+      genBtn.disabled = true;
+      genBtn.textContent = "Asking the model…";
+      try {
+        const resp = await api(`/api/projects/${params.pid}/specs/suggest`, {
+          method: "POST", body: { title: t, intent: i, qa } });
+        const added = (resp.criteria || []).filter((s) => s.text && s.sensor_kind);
+        if (added.length === 0) {
+          toast("Model returned nothing usable", "error");
+          return;
+        }
+        for (const s of added) {
+          criteria.push({ id: genID(), text: s.text, sensor_kind: s.sensor_kind });
+        }
+        renderCriteria();
+        toast(`Added ${added.length} suggestion${added.length === 1 ? "" : "s"} — review and edit`);
+      } catch (err) {
+        toast(err.message, "error");
+      } finally {
+        genBtn.disabled = false;
+        genBtn.textContent = "Generate criteria";
+      }
+    });
+    const dismissBtn = el("button", { class: "secondary" }, "Dismiss");
+    dismissBtn.addEventListener("click", () => { refinePanel.style.display = "none"; });
+    refinePanel.appendChild(el("div", { class: "row",
+      style: "gap:8px;margin-top:14px" }, [genBtn, dismissBtn]));
+  }
+
   const suggestBtn = el("button", { class: "secondary" }, "Suggest from title + intent");
   suggestBtn.addEventListener("click", async () => {
     const title = titleInput.value.trim();
     const intent = intentInput.value.trim();
     if (!title) return toast("Type a title first", "error");
     suggestBtn.disabled = true;
-    suggestBtn.textContent = "Asking the model…";
+    suggestBtn.textContent = "Refining…";
     try {
-      const resp = await api(`/api/projects/${params.pid}/specs/suggest`, {
+      const refined = await api(`/api/projects/${params.pid}/specs/refine`, {
         method: "POST", body: { title, intent } });
-      const added = (resp.criteria || []).filter((s) => s.text && s.sensor_kind);
-      if (added.length === 0) {
-        toast("Model returned nothing usable", "error");
-        return;
-      }
-      for (const s of added) {
-        criteria.push({ id: genID(), text: s.text, sensor_kind: s.sensor_kind });
-      }
-      renderCriteria();
-      toast(`Added ${added.length} suggestion${added.length === 1 ? "" : "s"} — review and edit`);
+      renderRefinePanel(refined);
     } catch (err) {
       if (err.status === 503) {
-        toast("No LLM provider on the server (set ANTHROPIC_API_KEY)", "error");
+        showRefinePanelError("No LLM provider on the server. Set ANTHROPIC_API_KEY or install the claude CLI.");
       } else {
         toast(err.message, "error");
       }
@@ -126,6 +210,7 @@ export async function render(mount, params) {
     el("label", {}, "Priority"), priorityInput,
     el("h2", { style: "margin-top:18px" }, "Acceptance criteria"),
     el("div", { class: "row", style: "gap:8px;margin-bottom:6px" }, [suggestBtn]),
+    refinePanel,
     criteriaList,
     el("div", { class: "row", style: "gap:8px;margin-top:8px" }, [newCritKind, newCritText, addCrit]),
     el("div", { class: "row", style: "gap:8px;margin-top:18px" }, [submit, cancel]),

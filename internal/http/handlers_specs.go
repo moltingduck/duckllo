@@ -14,19 +14,59 @@ import (
 )
 
 type suggestCriteriaReq struct {
+	Title  string       `json:"title"`
+	Intent string       `json:"intent"`
+	QA     []suggest.QA `json:"qa,omitempty"`
+}
+
+type refineSpecReq struct {
 	Title  string `json:"title"`
 	Intent string `json:"intent"`
 }
 
-// handleSuggestCriteria asks the configured LLM provider to propose
-// 3–6 acceptance criteria based on title + intent. Pure UX affordance —
-// the user accepts/edits the suggestions in the composer; nothing is
-// persisted by this endpoint. Returns 503 if no provider is wired (no
-// ANTHROPIC_API_KEY) so the UI can hide the button instead of erroring.
+func (s *Server) requireProvider(w http.ResponseWriter) bool {
+	if s.provider != nil {
+		return true
+	}
+	writeError(w, http.StatusServiceUnavailable,
+		"no LLM provider configured on the server (set ANTHROPIC_API_KEY or install the claude CLI)")
+	return false
+}
+
+// handleRefineSpec is step 1 of the two-step suggest flow. The model
+// reads the user's draft title + intent and returns (a) a tightened
+// version of each and (b) 2-4 clarifying questions whose answers would
+// meaningfully change the acceptance criteria. The UI shows the refined
+// fields as editable inputs and renders the questions as answer rows;
+// the user then triggers /suggest with those answers attached as qa[].
+func (s *Server) handleRefineSpec(w http.ResponseWriter, r *http.Request) {
+	if !s.requireProvider(w) {
+		return
+	}
+	var req refineSpecReq
+	if err := decodeJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if strings.TrimSpace(req.Title) == "" {
+		writeError(w, http.StatusBadRequest, "title required")
+		return
+	}
+	out, err := suggest.Refine(r.Context(), s.provider, req.Title, req.Intent)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// handleSuggestCriteria is step 2 of the two-step flow (or the only
+// step if the user skips refine). The model proposes 3–6 acceptance
+// criteria based on title + intent + optional clarifying answers. Pure
+// UX affordance — the user accepts/edits in the composer; nothing is
+// persisted by this endpoint.
 func (s *Server) handleSuggestCriteria(w http.ResponseWriter, r *http.Request) {
-	if s.provider == nil {
-		writeError(w, http.StatusServiceUnavailable,
-			"no LLM provider configured on the server (set ANTHROPIC_API_KEY)")
+	if !s.requireProvider(w) {
 		return
 	}
 	var req suggestCriteriaReq
@@ -38,7 +78,7 @@ func (s *Server) handleSuggestCriteria(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "title required")
 		return
 	}
-	out, err := suggest.Criteria(r.Context(), s.provider, req.Title, req.Intent)
+	out, err := suggest.Criteria(r.Context(), s.provider, req.Title, req.Intent, req.QA)
 	if err != nil {
 		writeError(w, http.StatusBadGateway, err.Error())
 		return
