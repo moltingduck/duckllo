@@ -159,4 +159,38 @@ Claude Code will *describe* the change instead of making it. The
 provider's default Args ship with --permission-mode acceptEdits; do
 not strip it. See commit 28ae6eb for the bug-fix pair.`,
 	},
+	{
+		Kind: "agents_md",
+		Name: "Validator parks runs that didn't fully pass — don't bypass it",
+		Body: `runValidator only advances with FinalStatus=done when every
+criterion has a verdict of "pass". Anything else (fail / warn /
+skipped / manual) leaves the run in 'validating', closes the
+work_queue item, and waits for human input. Don't add code paths that
+mark runs done unconditionally — that re-introduces the false-positive
+validated specs the harness shipped with for two days. If you
+legitimately want to force-finish a run, use POST /runs/{rid}/complete
+(the human escape hatch) which updates the spec consistently.`,
+	},
+	{
+		Kind: "agents_md",
+		Name: "Annotations must enqueue, not just flip status",
+		Body: `Posting a fix_required annotation does TWO things in
+store.CreateAnnotation: (1) flips runs.status to 'correcting' so the
+dashboard reflects what's happening, AND (2) inserts a 'correct'
+work_queue row so the corrector agent has something to claim. Status
+without a queue entry leaves the run permanently stuck. The insert is
+idempotent (NOT EXISTS guard), so multiple annotations during one
+correction cycle don't pile up duplicate work items.`,
+	},
+	{
+		Kind: "agents_md",
+		Name: "Iteration transcripts are durable; use them",
+		Body: `Every iteration row carries a transcript column with the full
+prompt + response (single-turn) or the entire multi-turn message
+history (executor). Capped at 64 KiB. When debugging a misbehaving
+run, the transcript is the source of truth for what the model
+actually saw and said — don't try to reconstruct from logs or
+re-run the spec. The Web UI's iteration timeline exposes a
+"View transcript" expander on each card.`,
+	},
 }
