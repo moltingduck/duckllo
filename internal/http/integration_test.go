@@ -12,10 +12,14 @@ package http_test
 // otherwise so `go test ./...` is clean on machines without Postgres.
 
 import (
+	"bufio"
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -306,6 +310,291 @@ func mustReadBody(res *http.Response) string {
 	return string(b)
 }
 
+// ─── Additional integration tests ─────────────────────────────────────────
+
+// TestAnnotationFlipsRunToCorrecting exercises the harness's correction
+// signal: a fix_required annotation must move the parent run from
+// 'validating' to 'correcting' so the corrector phase becomes claimable.
+func TestAnnotationFlipsRunToCorrecting(t *testing.T) {
+	e := setupTestEnv(t)
+
+	// Spec with a screenshot criterion.
+	var spec map[string]any
+	e.c.do("POST", "/api/projects/"+e.pid+"/specs", e.c.token,
+		map[string]any{"title": "annot test", "intent": "x"}, &spec, http.StatusCreated)
+	sid := spec["id"].(string)
+	e.c.do("POST", "/api/projects/"+e.pid+"/specs/"+sid+"/criteria", e.c.token,
+		map[string]any{"text": "looks ok", "sensor_kind": "screenshot"}, nil, http.StatusOK)
+	e.c.do("POST", "/api/projects/"+e.pid+"/specs/"+sid+"/approve", e.c.token, nil, nil, http.StatusOK)
+
+	rid, _ := e.runRunnerThroughValidate(t, sid)
+
+	// Post a screenshot verification (JSON-only — no artifact needed for
+	// this test; the next test covers multipart).
+	var verif map[string]any
+	e.c.do("POST", "/api/projects/"+e.pid+"/runs/"+rid+"/verifications", e.apiKey,
+		map[string]any{
+			"kind": "screenshot", "class": "computational",
+			"status": "pass", "summary": "fake",
+			"artifact_url": "/api/uploads/fake.png",
+		}, &verif, http.StatusCreated)
+	vid := verif["id"].(string)
+
+	// Annotate it.
+	e.c.do("POST", "/api/projects/"+e.pid+"/verifications/"+vid+"/annotations", e.c.token,
+		map[string]any{
+			"bbox":    map[string]any{"x": 0.1, "y": 0.1, "w": 0.2, "h": 0.05},
+			"body":    "fix this",
+			"verdict": "fix_required",
+		}, nil, http.StatusCreated)
+
+	// Run must now be 'correcting'.
+	var run map[string]any
+	e.c.do("GET", "/api/projects/"+e.pid+"/runs/"+rid, e.c.token, nil, &run, http.StatusOK)
+	got := run["run"].(map[string]any)["status"]
+	if got != "correcting" {
+		t.Fatalf("run status: got %v want correcting", got)
+	}
+
+	// And the bundle must surface the open annotation.
+	var bundle map[string]any
+	e.c.do("GET", "/api/projects/"+e.pid+"/runs/"+rid+"/bundle", e.apiKey, nil, &bundle, http.StatusOK)
+	open := bundle["open_annotations"].([]any)
+	if len(open) != 1 {
+		t.Fatalf("bundle.open_annotations: got %d want 1", len(open))
+	}
+	if (open[0].(map[string]any))["body"] != "fix this" {
+		t.Errorf("body: %v", open[0])
+	}
+
+	// 'acceptable' annotations must NOT trigger the flip — verify.
+	e.c.do("POST", "/api/projects/"+e.pid+"/verifications/"+vid+"/annotations", e.c.token,
+		map[string]any{"bbox": map[string]any{}, "body": "lgtm", "verdict": "acceptable"},
+		nil, http.StatusCreated)
+	e.c.do("GET", "/api/projects/"+e.pid+"/runs/"+rid, e.c.token, nil, &run, http.StatusOK)
+	if got := run["run"].(map[string]any)["status"]; got != "correcting" {
+		t.Errorf("status drifted off correcting: got %v", got)
+	}
+}
+
+// TestMultipartArtifactRoundTrip uploads a PNG via the multipart
+// verifications endpoint and reads it back through /api/uploads/.
+func TestMultipartArtifactRoundTrip(t *testing.T) {
+	e := setupTestEnv(t)
+
+	// Minimal spec + run setup.
+	var spec map[string]any
+	e.c.do("POST", "/api/projects/"+e.pid+"/specs", e.c.token,
+		map[string]any{"title": "upload test", "intent": "x"}, &spec, http.StatusCreated)
+	sid := spec["id"].(string)
+	e.c.do("POST", "/api/projects/"+e.pid+"/specs/"+sid+"/criteria", e.c.token,
+		map[string]any{"text": "ok", "sensor_kind": "screenshot"}, nil, http.StatusOK)
+	e.c.do("POST", "/api/projects/"+e.pid+"/specs/"+sid+"/approve", e.c.token, nil, nil, http.StatusOK)
+	rid, _ := e.runRunnerThroughValidate(t, sid)
+
+	// Build a multipart body: 1x1 transparent PNG + meta JSON.
+	pngBytes, _ := base64.StdEncoding.DecodeString(
+		"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+P+/HgAFhAJ/wlseKgAAAABJRU5ErkJggg==")
+	body := &bytes.Buffer{}
+	mw := multipart.NewWriter(body)
+	meta := `{"kind":"screenshot","class":"computational","status":"pass","summary":"smoke"}`
+	_ = mw.WriteField("meta", meta)
+	mh := make(map[string][]string)
+	mh["Content-Disposition"] = []string{`form-data; name="file"; filename="tiny.png"`}
+	mh["Content-Type"] = []string{"image/png"}
+	fw, _ := mw.CreatePart(mh)
+	_, _ = fw.Write(pngBytes)
+	_ = mw.Close()
+
+	req, err := http.NewRequest("POST",
+		e.baseURL+"/api/projects/"+e.pid+"/runs/"+rid+"/verifications", body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Authorization", "Bearer "+e.apiKey)
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.StatusCode != http.StatusCreated {
+		rb, _ := io.ReadAll(res.Body)
+		t.Fatalf("upload: status %d body=%s", res.StatusCode, string(rb))
+	}
+
+	// Verification list should now contain one row with an artifact_url.
+	var verifs []map[string]any
+	e.c.do("GET", "/api/projects/"+e.pid+"/runs/"+rid+"/verifications", e.c.token, nil, &verifs, http.StatusOK)
+	if len(verifs) != 1 {
+		t.Fatalf("verifications: got %d want 1", len(verifs))
+	}
+	url := verifs[0]["artifact_url"].(string)
+	if !strings.HasPrefix(url, "/api/uploads/") {
+		t.Fatalf("artifact_url unexpected: %q", url)
+	}
+
+	// Fetch the artifact back; bytes must match.
+	getRes, err := http.Get(e.baseURL + url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer getRes.Body.Close()
+	got, _ := io.ReadAll(getRes.Body)
+	if !bytes.Equal(got, pngBytes) {
+		t.Errorf("artifact bytes differ: got %d want %d", len(got), len(pngBytes))
+	}
+}
+
+// TestPlanSupersession asserts that creating a new plan for a spec marks
+// any prior non-approved plans 'superseded' inside the same transaction.
+func TestPlanSupersession(t *testing.T) {
+	e := setupTestEnv(t)
+	var spec map[string]any
+	e.c.do("POST", "/api/projects/"+e.pid+"/specs", e.c.token,
+		map[string]any{"title": "plan test", "intent": "x"}, &spec, http.StatusCreated)
+	sid := spec["id"].(string)
+
+	// Two drafts in a row.
+	var p1, p2 map[string]any
+	e.c.do("POST", "/api/projects/"+e.pid+"/specs/"+sid+"/plans", e.c.token,
+		map[string]any{"created_by_role": "human", "steps": []map[string]any{}},
+		&p1, http.StatusCreated)
+	e.c.do("POST", "/api/projects/"+e.pid+"/specs/"+sid+"/plans", e.c.token,
+		map[string]any{"created_by_role": "human", "steps": []map[string]any{}},
+		&p2, http.StatusCreated)
+
+	// Re-read via GET spec; first plan should be superseded.
+	var read map[string]any
+	e.c.do("GET", "/api/projects/"+e.pid+"/specs/"+sid, e.c.token, nil, &read, http.StatusOK)
+	plans := read["plans"].([]any)
+	if len(plans) != 2 {
+		t.Fatalf("plans: got %d want 2", len(plans))
+	}
+	statuses := map[int]string{}
+	for _, p := range plans {
+		m := p.(map[string]any)
+		statuses[int(m["version"].(float64))] = m["status"].(string)
+	}
+	if statuses[1] != "superseded" {
+		t.Errorf("v1 status: got %q want superseded", statuses[1])
+	}
+	if statuses[2] != "draft" {
+		t.Errorf("v2 status: got %q want draft", statuses[2])
+	}
+}
+
+// TestRecurringFailures inserts repeated failing verifications and asserts
+// the steering aggregate surfaces them with the right count.
+func TestRecurringFailures(t *testing.T) {
+	e := setupTestEnv(t)
+	var spec map[string]any
+	e.c.do("POST", "/api/projects/"+e.pid+"/specs", e.c.token,
+		map[string]any{"title": "flaky", "intent": "x"}, &spec, http.StatusCreated)
+	sid := spec["id"].(string)
+	e.c.do("POST", "/api/projects/"+e.pid+"/specs/"+sid+"/criteria", e.c.token,
+		map[string]any{"text": "lint passes", "sensor_kind": "lint"}, nil, http.StatusOK)
+	e.c.do("POST", "/api/projects/"+e.pid+"/specs/"+sid+"/approve", e.c.token, nil, nil, http.StatusOK)
+	rid, _ := e.runRunnerThroughValidate(t, sid)
+
+	// Resolve the criterion id.
+	var fresh map[string]any
+	e.c.do("GET", "/api/projects/"+e.pid+"/specs/"+sid, e.c.token, nil, &fresh, http.StatusOK)
+	critID := fresh["spec"].(map[string]any)["acceptance_criteria"].([]any)[0].(map[string]any)["id"].(string)
+
+	// Three failing verifications for the same (spec, criterion, kind).
+	for i := 0; i < 3; i++ {
+		e.c.do("POST", "/api/projects/"+e.pid+"/runs/"+rid+"/verifications", e.apiKey,
+			map[string]any{
+				"criterion_id": critID, "kind": "lint", "class": "computational",
+				"status": "fail", "summary": fmt.Sprintf("attempt %d failed", i+1),
+			}, nil, http.StatusCreated)
+	}
+
+	var fails []map[string]any
+	e.c.do("GET", "/api/projects/"+e.pid+"/steering/recurring-failures",
+		e.c.token, nil, &fails, http.StatusOK)
+	if len(fails) != 1 {
+		t.Fatalf("recurring failures: got %d want 1: %+v", len(fails), fails)
+	}
+	row := fails[0]
+	if int(row["fail_count"].(float64)) != 3 {
+		t.Errorf("fail_count: got %v want 3", row["fail_count"])
+	}
+	if row["criterion_id"] != critID {
+		t.Errorf("criterion_id mismatch: got %v want %s", row["criterion_id"], critID)
+	}
+	if row["criterion_text"] != "lint passes" {
+		t.Errorf("criterion_text: got %v", row["criterion_text"])
+	}
+	if row["last_summary"] != "attempt 3 failed" {
+		t.Errorf("last_summary: got %v", row["last_summary"])
+	}
+}
+
+// TestSSEDeliversEvents subscribes to /events and asserts that creating a
+// spec produces a spec.created event on the stream within a short window.
+func TestSSEDeliversEvents(t *testing.T) {
+	e := setupTestEnv(t)
+
+	url := e.baseURL + "/api/projects/" + e.pid + "/events?token=" + e.c.token
+	req, _ := http.NewRequest("GET", url, nil)
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("subscribe: status %d", res.StatusCode)
+	}
+
+	type event struct {
+		topic, data string
+	}
+	events := make(chan event, 8)
+	go func() {
+		sc := bufio.NewScanner(res.Body)
+		var topic, data string
+		for sc.Scan() {
+			line := sc.Text()
+			switch {
+			case strings.HasPrefix(line, "event: "):
+				topic = strings.TrimPrefix(line, "event: ")
+			case strings.HasPrefix(line, "data: "):
+				data = strings.TrimPrefix(line, "data: ")
+			case line == "":
+				if topic != "" {
+					events <- event{topic: topic, data: data}
+					topic, data = "", ""
+				}
+			}
+		}
+	}()
+
+	// Drain the connected event.
+	select {
+	case <-events:
+	case <-time.After(2 * time.Second):
+		t.Fatal("did not receive connected event")
+	}
+
+	// Create a spec; should fire spec.created.
+	go func() {
+		e.c.do("POST", "/api/projects/"+e.pid+"/specs", e.c.token,
+			map[string]any{"title": "sse", "intent": "x"}, nil, http.StatusCreated)
+	}()
+	select {
+	case ev := <-events:
+		if ev.topic != "spec.created" {
+			t.Errorf("topic: got %q want spec.created", ev.topic)
+		}
+		if !strings.Contains(ev.data, `"title":"sse"`) {
+			t.Errorf("data missing title: %q", ev.data)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("did not receive spec.created within 3s")
+	}
+}
+
 // wipeAll drops every duckllo table to give the test a clean slate.
 // The migration runner re-creates them.
 func wipeAll(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
@@ -322,4 +611,135 @@ func wipeAll(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
 	for _, tbl := range tables {
 		_, _ = pool.Exec(ctx, "DROP TABLE IF EXISTS "+tbl+" CASCADE")
 	}
+}
+
+// testEnv bundles a fresh server + auth + project + API key for the
+// follow-on test functions to share. Each call rewrites the DB; tests
+// run sequentially by default, so isolation is by destruction.
+type testEnv struct {
+	c        *apiClient
+	pool     *pgxpool.Pool
+	baseURL  string
+	pid      string
+	runnerID string
+	apiKey   string // duckllo_<...> bearer for runner-side calls
+}
+
+func setupTestEnv(t *testing.T) *testEnv {
+	t.Helper()
+	dsn := os.Getenv("TEST_DATABASE_URL")
+	if dsn == "" {
+		t.Skip("TEST_DATABASE_URL not set")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	t.Cleanup(cancel)
+
+	pool, err := db.Open(ctx, dsn)
+	if err != nil {
+		t.Fatalf("db open: %v", err)
+	}
+	t.Cleanup(pool.Close)
+
+	wipeAll(t, ctx, pool)
+	if err := db.Migrate(ctx, pool); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	cfg := &config.Config{
+		Addr:           ":0",
+		DatabaseURL:    dsn,
+		UploadsDir:     t.TempDir(),
+		MaxUploadBytes: 32 * 1024 * 1024,
+	}
+	srv := httpapi.NewServer(cfg, pool)
+	ts := httptest.NewServer(srv.Handler())
+	t.Cleanup(ts.Close)
+
+	c := &apiClient{t: t, base: ts.URL}
+
+	// Register first user (becomes admin).
+	var sess struct{ Token string }
+	c.do("POST", "/api/auth/register", "", map[string]any{
+		"username": "alice", "password": "alice-secret",
+	}, &sess, http.StatusCreated)
+	c.token = sess.Token
+
+	// Create a project + mint an API key the runner-side calls will use.
+	var project map[string]any
+	c.do("POST", "/api/projects", c.token, map[string]any{
+		"name": "test", "description": "integration",
+	}, &project, http.StatusCreated)
+	pid := project["id"].(string)
+
+	var keyResp struct {
+		Plain string `json:"plain"`
+	}
+	c.do("POST", "/api/projects/"+pid+"/api-keys", c.token, map[string]any{
+		"label": "test-runner",
+	}, &keyResp, http.StatusCreated)
+
+	return &testEnv{
+		c: c, pool: pool, baseURL: ts.URL,
+		pid: pid, runnerID: "test-runner-1", apiKey: keyResp.Plain,
+	}
+}
+
+// runRunnerThroughValidate is a helper for tests that need the run to
+// reach the validate phase but don't care about the planner+executor
+// content. Returns a function that posts a screenshot verification and
+// the verification id.
+func (e *testEnv) runRunnerThroughValidate(t *testing.T, specID string) (runID, claimedExecPhase string) {
+	t.Helper()
+	// Start run.
+	var run map[string]any
+	e.c.do("POST", fmt.Sprintf("/api/projects/%s/specs/%s/runs", e.pid, specID),
+		e.c.token, map[string]any{}, &run, http.StatusCreated)
+	rid := run["id"].(string)
+
+	// Claim plan, post planner iteration + plan, advance to execute.
+	var claim struct {
+		WorkItem map[string]any `json:"work_item"`
+	}
+	e.c.do("POST", fmt.Sprintf("/api/projects/%s/work/claim", e.pid), e.apiKey,
+		map[string]any{"runner_id": e.runnerID, "phases": []string{"plan"}},
+		&claim, http.StatusOK)
+	if claim.WorkItem["phase"] != "plan" {
+		t.Fatalf("first claim phase: %v", claim.WorkItem["phase"])
+	}
+	e.c.do("POST", fmt.Sprintf("/api/projects/%s/runs/%s/iterations", e.pid, rid),
+		e.apiKey,
+		map[string]any{"phase": "plan", "agent_role": "planner", "summary": "p"},
+		nil, http.StatusCreated)
+	var plan map[string]any
+	e.c.do("POST", fmt.Sprintf("/api/projects/%s/specs/%s/plans", e.pid, specID),
+		e.apiKey,
+		map[string]any{
+			"created_by_role": "planner",
+			"steps":           []map[string]any{{"id": "s1", "order": 1, "summary": "x"}},
+		}, &plan, http.StatusCreated)
+	planID := plan["id"].(string)
+	e.c.do("POST", fmt.Sprintf("/api/projects/%s/plans/%s/approve", e.pid, planID),
+		e.c.token, nil, nil, http.StatusOK)
+	e.c.do("POST", fmt.Sprintf("/api/projects/%s/runs/%s/advance", e.pid, rid),
+		e.apiKey,
+		map[string]any{"runner_id": e.runnerID, "from_phase": "plan", "to_phase": "execute", "plan_id": planID},
+		nil, http.StatusOK)
+
+	// Claim execute, advance to validate.
+	e.c.do("POST", fmt.Sprintf("/api/projects/%s/work/claim", e.pid), e.apiKey,
+		map[string]any{"runner_id": e.runnerID, "phases": []string{"execute"}},
+		&claim, http.StatusOK)
+	e.c.do("POST", fmt.Sprintf("/api/projects/%s/runs/%s/iterations", e.pid, rid),
+		e.apiKey,
+		map[string]any{"phase": "execute", "agent_role": "executor", "summary": "e"},
+		nil, http.StatusCreated)
+	e.c.do("POST", fmt.Sprintf("/api/projects/%s/runs/%s/advance", e.pid, rid),
+		e.apiKey,
+		map[string]any{"runner_id": e.runnerID, "from_phase": "execute", "to_phase": "validate"},
+		nil, http.StatusOK)
+
+	// Claim validate so the runner is locked on the run.
+	e.c.do("POST", fmt.Sprintf("/api/projects/%s/work/claim", e.pid), e.apiKey,
+		map[string]any{"runner_id": e.runnerID, "phases": []string{"validate"}},
+		&claim, http.StatusOK)
+	return rid, claim.WorkItem["phase"].(string)
 }
