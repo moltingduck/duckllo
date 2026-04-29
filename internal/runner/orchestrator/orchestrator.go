@@ -15,19 +15,25 @@ import (
 	"github.com/moltingduck/duckllo/internal/runner/agent"
 	"github.com/moltingduck/duckllo/internal/runner/client"
 	"github.com/moltingduck/duckllo/internal/runner/tools"
+	"github.com/moltingduck/duckllo/internal/runner/workspace"
 	"github.com/moltingduck/duckllo/internal/sensors"
 )
 
 type Orchestrator struct {
-	Client     *client.Client
-	Provider   agent.Provider
-	Sandbox    *tools.Sandbox
-	Sensors    *sensors.Registry
-	RunnerID   string
-	MaxTurns   int
-	DevURL     string // base URL the screenshot sensor should hit
-	ChromePath string // optional override for chromedp
-	Workspace  string
+	Client         *client.Client
+	Provider       agent.Provider
+	Sensors        *sensors.Registry
+	RunnerID       string
+	MaxTurns       int
+	DevURL         string // base URL the screenshot sensor should hit (Phase 1 default)
+	ChromePath     string // optional override for chromedp
+	Workspace      string // host fallback dir
+	ContainerImage string // when set, runs each spec in its own container
+
+	// Per-Run() state. Set in Run() before phase dispatch so the phase
+	// methods can pick up the right Sandbox + dev URL.
+	sandbox      *tools.Sandbox
+	activeDevURL string
 }
 
 // Run performs one phase of work for a claimed run+work_item.
@@ -37,18 +43,89 @@ func (o *Orchestrator) Run(ctx context.Context, work *client.WorkItem, run *clie
 		return fmt.Errorf("bundle: %w", err)
 	}
 
+	exec, devURL, teardown, err := o.openWorkspace(ctx, run)
+	if err != nil {
+		return fmt.Errorf("workspace: %w", err)
+	}
+	o.sandbox = tools.NewSandboxWith(exec)
+	if devURL != "" {
+		o.activeDevURL = devURL
+	} else {
+		o.activeDevURL = o.DevURL
+	}
+
 	switch work.Phase {
 	case "plan":
-		return o.runPlanner(ctx, work, bundle)
+		err = o.runPlanner(ctx, work, bundle)
 	case "execute":
-		return o.runExecutor(ctx, work, bundle)
+		err = o.runExecutor(ctx, work, bundle)
 	case "validate":
-		return o.runValidator(ctx, work, bundle)
+		err = o.runValidator(ctx, work, bundle)
 	case "correct":
-		return o.runCorrector(ctx, work, bundle)
+		err = o.runCorrector(ctx, work, bundle)
 	default:
-		return fmt.Errorf("unknown phase %q", work.Phase)
+		err = fmt.Errorf("unknown phase %q", work.Phase)
 	}
+
+	// Tear down the container only when the run is finishing — otherwise
+	// the next phase claim re-uses it.
+	if teardown != nil {
+		needTeardown := o.runShouldTearDown(ctx, work.RunID)
+		if needTeardown {
+			_ = teardown(ctx)
+		}
+	}
+	return err
+}
+
+// openWorkspace returns the executor for this run, lazily provisioning a
+// Docker container the first time it sees the run. Returns (exec, devURL,
+// teardown, err). teardown is nil for host mode (nothing to release).
+func (o *Orchestrator) openWorkspace(ctx context.Context, run *client.Run) (workspace.Executor, string, func(context.Context) error, error) {
+	if o.ContainerImage == "" {
+		return workspace.NewHost(o.Workspace), "", nil, nil
+	}
+
+	name := "duckllo-" + shortID(run.ID)
+	de := workspace.NewDocker(o.ContainerImage, name, nil, nil)
+	if err := de.Provision(ctx); err != nil {
+		return nil, "", nil, err
+	}
+	// Persist what we know to the server so sensors fetched via bundle can
+	// find the dev URL etc. Phase 1 dev URL is empty; Phase 2 (Tailscale
+	// sidecar) populates it.
+	meta := map[string]any{
+		"kind":         "docker",
+		"container_id": de.ID(),
+		"workspace":    de.WorkspacePath(),
+	}
+	if err := o.Client.SetWorkspaceMeta(ctx, run.ID, meta); err != nil {
+		log.Printf("workspace: SetWorkspaceMeta: %v", err)
+	}
+	return de, "", de.Close, nil
+}
+
+// runShouldTearDown checks whether the run has reached a terminal state
+// (done|failed|aborted) so the orchestrator knows it's safe to remove the
+// container. Done by re-fetching the run after the phase ran.
+func (o *Orchestrator) runShouldTearDown(ctx context.Context, runID uuid.UUID) bool {
+	r, err := o.Client.Bundle(ctx, runID)
+	if err != nil {
+		return false
+	}
+	switch r.Run.Status {
+	case "done", "failed", "aborted":
+		return true
+	}
+	return false
+}
+
+func shortID(u uuid.UUID) string {
+	s := u.String()
+	if len(s) >= 8 {
+		return s[:8]
+	}
+	return s
 }
 
 // runPlanner asks the model for a JSON plan, posts a new plan revision,
@@ -99,7 +176,7 @@ func (o *Orchestrator) runPlanner(ctx context.Context, work *client.WorkItem, b 
 // execute them in the sandbox and feed back tool_results until the model
 // returns a final text reply or we hit MaxTurns.
 func (o *Orchestrator) runExecutor(ctx context.Context, work *client.WorkItem, b *client.Bundle) error {
-	tools := o.Sandbox.Defs()
+	tools := o.sandbox.Defs()
 	msgs := []agent.Message{{Role: "user", Content: userPromptFor("executor", b)}}
 
 	maxTurns := o.MaxTurns
@@ -126,7 +203,7 @@ func (o *Orchestrator) runExecutor(ctx context.Context, work *client.WorkItem, b
 			break // model finished
 		}
 		for _, tc := range resp.ToolCalls {
-			result := o.Sandbox.Execute(ctx, tc)
+			result := o.sandbox.Execute(ctx, tc)
 			msgs = append(msgs, agent.Message{
 				Role: "tool", ToolID: tc.ID, Content: result,
 			})
@@ -156,7 +233,7 @@ func (o *Orchestrator) runValidator(ctx context.Context, work *client.WorkItem, 
 
 	env := sensors.Env{
 		WorkspaceDir: o.Workspace,
-		DevURL:       o.DevURL,
+		DevURL:       o.activeDevURL,
 		ChromePath:   o.ChromePath,
 		LogF:         func(f string, args ...any) { log.Printf(f, args...) },
 	}

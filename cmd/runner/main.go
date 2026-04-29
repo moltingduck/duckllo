@@ -28,6 +28,7 @@ import (
 	"github.com/moltingduck/duckllo/internal/runner/client"
 	"github.com/moltingduck/duckllo/internal/runner/orchestrator"
 	"github.com/moltingduck/duckllo/internal/runner/tools"
+	"github.com/moltingduck/duckllo/internal/runner/workspace"
 	"github.com/moltingduck/duckllo/internal/sensors"
 )
 
@@ -44,13 +45,14 @@ func main() {
 		projectID   = flag.String("project", env("DUCKLLO_PROJECT", ""), "duckllo project UUID")
 		runnerID    = flag.String("runner-id", env("DUCKLLO_RUNNER_ID", defaultRunnerID()), "stable identifier for this runner")
 		rolesFlag   = flag.String("roles", env("DUCKLLO_ROLES", "planner,executor,validator,corrector"), "comma-separated phases this runner will claim")
-		workspace   = flag.String("workspace", env("DUCKLLO_WORKSPACE", "./workspace"), "filesystem path the executor edits")
+		workspaceDir = flag.String("workspace", env("DUCKLLO_WORKSPACE", "./workspace"), "filesystem path the executor edits (host mode)")
 		model       = flag.String("model", env("DUCKLLO_MODEL", ""), "Anthropic model id (default claude-sonnet-4-6)")
 		anthropic   = flag.String("anthropic-key", os.Getenv("ANTHROPIC_API_KEY"), "Anthropic API key")
 		intervalSec = flag.Int("poll-interval", 5, "seconds between empty-claim retries")
 		once        = flag.Bool("once", false, "claim and process exactly one work item then exit")
 		devURL      = flag.String("dev-url", env("DUCKLLO_DEV_URL", ""), "base URL of the dev server, used by screenshot sensor")
 		chromePath  = flag.String("chrome-path", env("DUCKLLO_CHROME_PATH", ""), "override Chrome/Chromium binary path")
+		image       = flag.String("container-image", env("DUCKLLO_CONTAINER_IMAGE", ""), "Docker image for per-run workspaces (empty = run on host)")
 	)
 	flag.Parse()
 
@@ -64,7 +66,7 @@ func main() {
 	if *anthropic == "" {
 		log.Fatal("ANTHROPIC_API_KEY required (or --anthropic-key)")
 	}
-	if err := tools.EnsureRoot(*workspace); err != nil {
+	if err := tools.EnsureRoot(*workspaceDir); err != nil {
 		log.Fatalf("workspace: %v", err)
 	}
 
@@ -75,20 +77,25 @@ func main() {
 
 	c := client.New(*baseURL, *apiKey, pid)
 	prov := agent.NewAnthropic(*anthropic, *model)
-	sandbox := tools.NewSandbox(*workspace)
 
 	o := &orchestrator.Orchestrator{
-		Client: c, Provider: prov, Sandbox: sandbox,
+		Client: c, Provider: prov,
 		Sensors:    sensors.DefaultRegistry(),
 		RunnerID:   *runnerID,
 		MaxTurns:   12,
 		DevURL:     *devURL,
 		ChromePath: *chromePath,
-		Workspace:  *workspace,
+		Workspace:  *workspaceDir,
+		ContainerImage: *image,
 	}
 
-	log.Printf("runner %s up — url=%s project=%s roles=%v workspace=%s model=%s",
-		*runnerID, *baseURL, *projectID, roles, *workspace, prov.DefaultModel())
+	mode := "host"
+	if *image != "" {
+		mode = "docker:" + *image
+	}
+	log.Printf("runner %s up — url=%s project=%s roles=%v workspace=%s mode=%s model=%s",
+		*runnerID, *baseURL, *projectID, roles, *workspaceDir, mode, prov.DefaultModel())
+	_ = workspace.Meta{} // keep workspace import while orchestrator wires through
 
 	for {
 		select {

@@ -81,6 +81,7 @@ func (s *Server) routes() http.Handler {
 				r.Post("/iterations", s.handleAppendIteration)
 				r.Get("/verifications", s.handleListVerifications)
 				r.Post("/verifications", s.handlePostVerification)
+				r.Post("/workspace", s.handleSetWorkspace)
 			})
 			r.Patch("/iterations/{iterID}", s.handlePatchIteration)
 

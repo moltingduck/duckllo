@@ -237,6 +237,19 @@ func (s *Store) SetRunPlan(ctx context.Context, runID, planID uuid.UUID) error {
 	return err
 }
 
+// SetWorkspaceMeta is what the runner posts after Docker provisioning so
+// subsequent claims (and the bundle endpoint, used by sensors) know the
+// container ID, dev URL, etc.
+func (s *Store) SetWorkspaceMeta(ctx context.Context, runID uuid.UUID, meta []byte) error {
+	if len(meta) == 0 {
+		meta = []byte("{}")
+	}
+	_, err := s.Pool.Exec(ctx, `
+		UPDATE runs SET workspace_meta = $2::jsonb, updated_at = NOW() WHERE id = $1
+	`, runID, string(meta))
+	return err
+}
+
 func (s *Store) AbortRun(ctx context.Context, runID uuid.UUID) error {
 	_, err := s.Pool.Exec(ctx, `
 		UPDATE runs SET status = 'aborted', finished_at = NOW(), updated_at = NOW() WHERE id = $1

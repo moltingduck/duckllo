@@ -1,49 +1,36 @@
-// Package tools implements the small whitelist of tools the executor agent
-// can call: read_file, write_file, list_dir, exec. Phase 1 runs these
-// against the runner's working directory on the host. Phase 2 will do the
-// same calls inside a per-spec Docker container.
-//
-// The exec tool only allows commands whose argv[0] is on a small allow-list,
-// preventing a confused agent from running rm -rf or curl piping a script.
+// Package tools is the small whitelist of tools the executor agent can
+// call: read_file, write_file, list_dir, exec. The actual file IO and
+// process execution are delegated to a workspace.Executor — Phase 1 uses
+// HostExecutor; Phase 2 swaps to DockerExecutor — so the tool definitions
+// stay identical regardless of where work runs.
 package tools
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"io/fs"
 	"os"
-	"os/exec"
-	"path/filepath"
-	"sort"
-	"strings"
-	"time"
 
 	"github.com/moltingduck/duckllo/internal/runner/agent"
+	"github.com/moltingduck/duckllo/internal/runner/workspace"
 )
 
 type Sandbox struct {
-	Root             string        // working directory for this run
-	AllowedCommands  map[string]bool
-	MaxOutputBytes   int
-	ExecTimeout      time.Duration
+	Workspace workspace.Executor
 }
 
+// NewSandbox is kept for compatibility — it returns a host-backed sandbox
+// rooted at `root`. Callers that need a Docker workspace should call
+// NewSandboxWith(executor) directly.
 func NewSandbox(root string) *Sandbox {
-	return &Sandbox{
-		Root: root,
-		AllowedCommands: map[string]bool{
-			"go": true, "gofmt": true, "go-vet": true, "golangci-lint": true,
-			"git": true, "ls": true, "cat": true, "grep": true, "head": true, "tail": true,
-			"node": true, "npm": true, "npx": true, "python": true, "python3": true,
-			"make": true, "test": true, "echo": true, "pwd": true,
-		},
-		MaxOutputBytes: 256 * 1024,
-		ExecTimeout:    2 * time.Minute,
-	}
+	return &Sandbox{Workspace: workspace.NewHost(root)}
+}
+
+func NewSandboxWith(exec workspace.Executor) *Sandbox {
+	return &Sandbox{Workspace: exec}
 }
 
 // Defs returns the JSON-Schema tool definitions the executor agent sees.
+// Identical regardless of where the workspace runs.
 func (s *Sandbox) Defs() []agent.ToolDef {
 	return []agent.ToolDef{
 		{
@@ -81,7 +68,7 @@ func (s *Sandbox) Defs() []agent.ToolDef {
 		},
 		{
 			Name:        "exec",
-			Description: "Run a whitelisted command in the workspace. argv[0] must be one of: go, gofmt, golangci-lint, git, ls, cat, grep, head, tail, node, npm, npx, python, python3, make.",
+			Description: "Run a whitelisted command in the workspace. argv[0] must be on the host's exec allow-list (host workspace) or the container's PATH (docker workspace).",
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -93,138 +80,59 @@ func (s *Sandbox) Defs() []agent.ToolDef {
 	}
 }
 
-// Execute runs the tool the model requested and returns a stringified
-// result. Errors are returned as strings (not Go errors) so the runner can
-// feed them back to the model as a tool_result without abandoning the loop.
+// Execute runs the requested tool through the workspace. Errors are
+// returned as strings (not Go errors) so the runner can feed them back to
+// the model as a tool_result without abandoning the loop.
 func (s *Sandbox) Execute(ctx context.Context, call agent.ToolCall) string {
 	switch call.Name {
 	case "read_file":
-		return s.readFile(call.Input)
+		path, _ := call.Input["path"].(string)
+		body, err := s.Workspace.ReadFile(ctx, path)
+		if err != nil {
+			return "error: " + err.Error()
+		}
+		return string(body)
 	case "write_file":
-		return s.writeFile(call.Input)
+		path, _ := call.Input["path"].(string)
+		content, _ := call.Input["content"].(string)
+		if err := s.Workspace.WriteFile(ctx, path, []byte(content)); err != nil {
+			return "error: " + err.Error()
+		}
+		return fmt.Sprintf("wrote %d bytes to %s", len(content), path)
 	case "list_dir":
-		return s.listDir(call.Input)
+		path, _ := call.Input["path"].(string)
+		entries, err := s.Workspace.ListDir(ctx, path)
+		if err != nil {
+			return "error: " + err.Error()
+		}
+		out := ""
+		for _, e := range entries {
+			out += e + "\n"
+		}
+		if len(out) > 0 {
+			out = out[:len(out)-1]
+		}
+		return out
 	case "exec":
-		return s.exec(ctx, call.Input)
+		argvAny, _ := call.Input["argv"].([]any)
+		argv := make([]string, 0, len(argvAny))
+		for _, v := range argvAny {
+			if s, ok := v.(string); ok {
+				argv = append(argv, s)
+			}
+		}
+		out, err := s.Workspace.Exec(ctx, argv)
+		if err != nil {
+			return fmt.Sprintf("%s\nerror: %s", out, err.Error())
+		}
+		return string(out)
 	default:
 		return fmt.Sprintf("error: unknown tool %q", call.Name)
 	}
 }
 
-func (s *Sandbox) safe(rel string) (string, error) {
-	if rel == "" {
-		rel = "."
-	}
-	clean := filepath.Clean(rel)
-	if strings.HasPrefix(clean, "..") || filepath.IsAbs(clean) {
-		return "", errors.New("path escapes workspace")
-	}
-	return filepath.Join(s.Root, clean), nil
-}
-
-func (s *Sandbox) readFile(in map[string]any) string {
-	p, _ := in["path"].(string)
-	abs, err := s.safe(p)
-	if err != nil {
-		return "error: " + err.Error()
-	}
-	body, err := os.ReadFile(abs)
-	if err != nil {
-		return "error: " + err.Error()
-	}
-	if len(body) > s.MaxOutputBytes {
-		return string(body[:s.MaxOutputBytes]) + "\n[truncated]"
-	}
-	return string(body)
-}
-
-func (s *Sandbox) writeFile(in map[string]any) string {
-	p, _ := in["path"].(string)
-	content, _ := in["content"].(string)
-	abs, err := s.safe(p)
-	if err != nil {
-		return "error: " + err.Error()
-	}
-	if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
-		return "error: " + err.Error()
-	}
-	if err := os.WriteFile(abs, []byte(content), 0o644); err != nil {
-		return "error: " + err.Error()
-	}
-	return fmt.Sprintf("wrote %d bytes to %s", len(content), p)
-}
-
-func (s *Sandbox) listDir(in map[string]any) string {
-	p, _ := in["path"].(string)
-	abs, err := s.safe(p)
-	if err != nil {
-		return "error: " + err.Error()
-	}
-	entries, err := os.ReadDir(abs)
-	if err != nil {
-		return "error: " + err.Error()
-	}
-	names := make([]string, 0, len(entries))
-	for _, e := range entries {
-		name := e.Name()
-		if e.IsDir() {
-			name += "/"
-		}
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	return strings.Join(names, "\n")
-}
-
-func (s *Sandbox) exec(ctx context.Context, in map[string]any) string {
-	argvAny, _ := in["argv"].([]any)
-	if len(argvAny) == 0 {
-		return "error: argv required"
-	}
-	argv := make([]string, len(argvAny))
-	for i, v := range argvAny {
-		str, ok := v.(string)
-		if !ok {
-			return "error: argv must be strings"
-		}
-		argv[i] = str
-	}
-	cmd0 := argv[0]
-	if !s.AllowedCommands[cmd0] {
-		return fmt.Sprintf("error: command %q not on allow-list", cmd0)
-	}
-
-	cctx, cancel := context.WithTimeout(ctx, s.ExecTimeout)
-	defer cancel()
-	c := exec.CommandContext(cctx, argv[0], argv[1:]...)
-	c.Dir = s.Root
-
-	out, err := c.CombinedOutput()
-	if len(out) > s.MaxOutputBytes {
-		out = append(out[:s.MaxOutputBytes], []byte("\n[truncated]")...)
-	}
-	if cctx.Err() == context.DeadlineExceeded {
-		return string(out) + "\nerror: timed out after " + s.ExecTimeout.String()
-	}
-	if err != nil {
-		return fmt.Sprintf("%s\nerror: %s", out, err.Error())
-	}
-	return string(out)
-}
-
-// EnsureRoot makes sure the workspace directory exists.
+// EnsureRoot used to make a directory; still needed by main.go for the
+// host workspace fallback.
 func EnsureRoot(root string) error {
 	return os.MkdirAll(root, 0o755)
 }
-
-// rooted reports whether p is within root (after Clean). Used by tests.
-func rooted(root, p string) bool {
-	rel, err := filepath.Rel(root, p)
-	if err != nil {
-		return false
-	}
-	return !strings.HasPrefix(rel, "..")
-}
-
-var _ = fs.ErrNotExist
-var _ = rooted

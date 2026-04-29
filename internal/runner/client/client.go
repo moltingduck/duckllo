@@ -338,3 +338,10 @@ func (c *Client) ApprovePlan(ctx context.Context, planID uuid.UUID) error {
 func (c *Client) projectPath(suffix string) string {
 	return fmt.Sprintf("/api/projects/%s%s", c.ProjectID, suffix)
 }
+
+// SetWorkspaceMeta records the runner's workspace identifiers (container
+// id, network id, dev URL, worktree path) on the run. Called after
+// Docker provisioning succeeds.
+func (c *Client) SetWorkspaceMeta(ctx context.Context, runID uuid.UUID, meta map[string]any) error {
+	return c.do(ctx, "POST", c.projectPath(fmt.Sprintf("/runs/%s/workspace", runID)), meta, nil)
+}
