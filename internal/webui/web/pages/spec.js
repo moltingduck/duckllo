@@ -11,7 +11,8 @@ export async function render(mount, params) {
   const { pid, sid } = params;
   await refresh(mount, pid, sid);
   currentSource = events(pid);
-  ["spec.updated", "spec.criteria_changed", "run.queued", "run.advanced"].forEach((t) => {
+  ["spec.updated", "spec.criteria_changed", "run.queued", "run.advanced",
+    "plan.created", "plan.updated", "plan.approved"].forEach((t) => {
     currentSource.addEventListener(t, (ev) => {
       try {
         const body = JSON.parse(ev.data);

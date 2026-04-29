@@ -10,7 +10,9 @@ export async function render(mount, params) {
   const { pid, rid } = params;
   await refresh(mount, pid, rid);
   currentSource = events(pid);
-  ["iteration.appended", "iteration.updated", "verification.posted", "annotation.added", "run.advanced"].forEach((t) => {
+  ["iteration.appended", "iteration.updated", "verification.posted",
+    "verification.updated", "annotation.added", "run.advanced",
+    "run.workspace_set"].forEach((t) => {
     currentSource.addEventListener(t, () => refresh(mount, pid, rid));
   });
 }
