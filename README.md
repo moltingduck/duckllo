@@ -1,421 +1,121 @@
-# Duckllo
+# duckllo
 
-A kanban board built for teams and AI agents to collaborate on features, bugs, and tasks. Duckllo combines traditional kanban with approval workflows, quality gates, and a full REST API for agent automation.
+A **harness-engineering platform** for AI coding agents. Define a **Spec** with typed acceptance criteria; the runner agent walks a **Plan → Execute → Validate → Correct** loop; humans **review screenshots and draw boxes** to feed structured corrections back to the agent.
 
-![Board Overview](docs/gifs/09-board-overview.gif)
+Built around the harness-engineering ideas Anthropic, OpenAI and Thoughtworks have been writing about — guides (feedforward) + sensors (feedback) + a steering loop where humans iterate the harness rather than micro-review every diff.
 
-## Quick Start
+## Why duckllo
+
+The agent is the model; the harness is everything around it. duckllo is the harness:
+
+- **Spec** is the unit of work — intent + criteria, each criterion typed as a sensor target.
+- **Plan** is versioned, draftable, approvable. Planner agent drafts; humans approve.
+- **Run** is one execution attempt; iterations are durable turn-by-turn.
+- **Verifications** are typed sensor outputs (computational, inferential, human).
+- **Annotations** are how humans correct visually — draw a bbox on a screenshot, write a comment, the corrector agent reads it on its next turn.
+- **Harness rules** are the steering loop — when an issue recurs, encode a rule and the runner concatenates it into every iteration's prompt.
+
+Phase 1 ships the schema, Web UI, runner, sensors, and visual annotator. Phase 2 layers per-spec Docker isolation and a Tailscale sidecar so the dev server is reachable on the tailnet for visual validation without poking holes in the host.
+
+## Quick start
 
 ```bash
 git clone https://github.com/moltingduck/duckllo.git
 cd duckllo
-docker compose up --build -d
-```
 
-Open [http://localhost:3000](http://localhost:3000) and register your first account.
-
-## Configure Duckllo Skill for Claude Code
-
-Duckllo ships with a `/duckllo` slash command that teaches Claude agents how to use the kanban API. Install it so any Claude Code agent can track work, create cards, and follow the approval workflow automatically.
-
-### Install the Skill
-
-```bash
-# Interactive — choose global or project-level
-./install.sh
-
-# Global — available to all Claude Code agents on this machine
-./install.sh --global
-
-# Project-specific — only agents working in a given project
-./install.sh --project /path/to/your/project
-
-# Custom server URL (default: http://localhost:3000)
-./install.sh --global --url https://duckllo.example.com
-
-# Overwrite an existing skill file
-./install.sh --global --force
-```
-
-The installer will ask for your Duckllo username (the developer/owner account). This ensures the agent always adds you as a project owner.
-
-### What the Installer Does
-
-1. Copies `SKILL.md` (the full API reference) to your Claude commands directory:
-   - **Global**: `~/.claude/commands/duckllo.md`
-   - **Project**: `<project>/.claude/commands/duckllo.md`
-2. Injects your server URL and owner username into the skill file
-3. Verifies the Duckllo server is reachable
-
-### What the Agent Does on First Use
-
-When an agent reads the `/duckllo` skill for the first time on a new project, it automatically:
-
-1. Registers an account on the Duckllo server (or logs in if one exists)
-2. Creates a project using the current folder/repo name
-3. Generates an API key for the project
-4. Adds you (the developer) as a project **owner**
-5. Injects the Duckllo workflow rules into the project's `CLAUDE.md`
-
-After setup, the agent follows the full kanban workflow: create cards in Proposed, wait for your approval, pick up approved cards, implement, test, attach demo media, and move to Review.
-
-### Using the Skill
-
-Once installed, just type `/duckllo` in any Claude Code conversation to load the skill. The agent will know how to:
-
-- Create and manage cards via the API
-- Follow the Proposed → Todo → In Progress → Review → Done workflow
-- Run tests and attach results to cards
-- Upload demo GIFs/screenshots
-- Watch for new tasks with `worker.js`
-
-### Manual Setup (Without Installer)
-
-If you prefer to set things up manually:
-
-1. Copy `SKILL.md` to `~/.claude/commands/duckllo.md` (or `.claude/commands/duckllo.md` in your project)
-2. Register an account at `http://localhost:3000`
-3. Create a project and generate an API key in Settings
-4. Store credentials in `.duckllo.env`:
-   ```bash
-   export DUCKLLO_URL="http://localhost:3000"
-   export DUCKLLO_PROJECT="<project-id>"
-   export DUCKLLO_KEY="duckllo_<your-key>"
-   ```
-
-## Features
-
-### Board & Cards
-
-- **Customizable columns** — default: Backlog, Proposed, Todo, In Progress, Review, Done
-- **Card types** — Feature, Bug, Task, Improvement (color-coded)
-- **Priority levels** — Critical, High, Medium, Low
-- **Labels** — free-form tags for filtering and categorization
-- **Drag-and-drop** — move cards between columns with position ordering
-- **Card dependencies** — blocks, blocked-by, and related-to links between cards
-- **Due dates** — with overdue warnings on the board
-- **Time tracking** — automatic started_at / completed_at timestamps
-- **Assignees** — assign members to cards, self-assign with one click
-- **Demo media** — upload GIFs, PNGs, or videos directly to cards
-
-![Card Detail](docs/gifs/04-card-detail.gif)
-
-### Approval Workflow
-
-Agent-created cards go to **Proposed** with pending approval. Product owners can:
-
-- **Approve** — card auto-moves to Todo
-- **Reject** — card is marked as not needed
-- **Request revision** — agent updates and re-proposes
-
-![Comments & Approval](docs/gifs/05-comments.gif)
-
-### Quality Gates
-
-The server enforces requirements before cards can move to Review or Done:
-
-| Card type | Requirement |
-|-----------|-------------|
-| UI/frontend cards | Demo media (GIF/screenshot) required |
-| Backend/API cards | Test results required |
-| All cards | At least one of: test results or demo media |
-
-Cards with labels `ui`, `ux`, `frontend`, `user-operation`, `user-facing`, or `demo-required` must have demo media attached.
-
-### Auto-Review
-
-Toggle auto-review in the board header to let agents approve or reject cards in Review. When enabled, agents can:
-
-- Approve cards (auto-moves to Done)
-- Reject cards with feedback
-- Request revisions
-
-When disabled, only product owners and reviewers can approve.
-
-### Reviewer Role
-
-Add team members with the **reviewer** role for restricted access:
-
-- Can only see Review and Done columns
-- Can comment on and approve/reject Review cards
-- Cannot create, edit, move, or delete cards
-
-### Filtering & Search
-
-Press `F` or click **Filter** to open the filter bar:
-
-- Full-text search across titles and descriptions
-- Filter by type, priority, label, or testing status
-- Results update instantly
-
-![Filter Bar](docs/gifs/filter-bar-open.png)
-
-### Keyboard Shortcuts
-
-Press `?` to see all shortcuts:
-
-| Key | Action |
-|-----|--------|
-| `N` | New card |
-| `F` | Toggle filter bar |
-| `A` | Activity panel |
-| `R` | Archived cards |
-| `/` | Focus search |
-| `1`-`6` | Jump to column |
-| `J` / `K` | Next / previous card |
-| `E` | Edit card |
-| `M` | Assign to me |
-| `Esc` | Close modal |
-
-### Dark / Light Mode
-
-Toggle between dark and light themes. Preference is saved in your browser.
-
-### Auto-Archive
-
-Configure auto-archive in Settings to automatically archive cards that have been in Done for more than N days. Set to 0 to disable.
-
-### WIP Limits
-
-Set maximum cards per column in Settings. Columns at or over the limit show visual warnings (orange at limit, red over limit).
-
-### Bug Reports
-
-Public bug report form at `/bugs.html?project=<project-id>`. Configurable permissions: anonymous, logged-in, or members only.
-
-### Activity Feed
-
-Real-time activity panel showing card moves, comments, and status changes via Server-Sent Events (SSE).
-
-### Board Export
-
-Export all cards as JSON or CSV from Settings, with optional column filtering.
-
-### Git Commit Linking
-
-Set your Git repository URL in Settings. Commit hashes in card comments automatically become clickable links to your repository.
-
-## Roles
-
-### System Roles
-
-| Role | Description |
-|------|-------------|
-| `admin` | Full system access, user management |
-| `agent` | AI agent account, uses API keys |
-| `user` | Standard human user |
-
-### Project Roles
-
-| Role | Permissions |
-|------|-------------|
-| `owner` | Full project access, settings, delete |
-| `product_manager` | Approve/reject cards, manage settings |
-| `reviewer` | View Review/Done only, comment and approve/reject |
-| `member` | Create, edit, move cards |
-
-## API
-
-All endpoints require authentication via session token or API key:
-
-```bash
-# Session token (from login)
-curl -H "Authorization: Bearer <session-token>" ...
-
-# API key (from Settings > API Keys)
-curl -H "Authorization: Bearer duckllo_<key>" ...
-```
-
-### Authentication
-
-```
-POST /api/auth/register     # { username, password, display_name }
-POST /api/auth/login        # { username, password } → { token }
-POST /api/auth/logout
-GET  /api/auth/me
-```
-
-### Projects
-
-```
-GET    /api/projects
-POST   /api/projects                        # { name, description }
-GET    /api/projects/:pid
-PATCH  /api/projects/:pid/settings          # { auto_approve, auto_review, auto_archive_days, git_repo_url, wip_limits, bug_report_settings }
-DELETE /api/projects/:pid
-GET    /api/projects/:pid/stats
-GET    /api/projects/:pid/export?format=json&column=Done
-GET    /api/projects/:pid/activity?since=<ISO-timestamp>
-```
-
-### Cards
-
-```
-GET    /api/projects/:pid/cards             # ?column=&priority=&label=&sort=priority&limit=5&page=1
-POST   /api/projects/:pid/cards             # { title, description, card_type, priority, labels }
-PATCH  /api/projects/:pid/cards/:cid        # { title, testing_status, testing_result, ... }
-DELETE /api/projects/:pid/cards/:cid
-POST   /api/projects/:pid/cards/:cid/move   # { column_name, position }
-POST   /api/projects/:pid/cards/:cid/pickup # Atomically move to In Progress + assign
-POST   /api/projects/:pid/cards/:cid/upload # multipart/form-data file upload
-```
-
-**Pagination**: Add `?limit=5` for paginated results (max 5 per page). Use `?sort=priority` to order by severity (critical > high > medium > low). Without `limit`, returns a flat array.
-
-### Approval
-
-```
-POST /api/projects/:pid/cards/:cid/approve    # { action: "approve"|"reject"|"revise", comment }
-POST /api/projects/:pid/cards/:cid/repropose  # Re-submit after revision
-GET  /api/projects/:pid/auto-review           # { enabled, cards[] }
-```
-
-### Comments
-
-```
-GET  /api/projects/:pid/cards/:cid/comments
-POST /api/projects/:pid/cards/:cid/comments   # { content, comment_type }
-```
-
-### Card Links
-
-```
-GET    /api/projects/:pid/cards/:cid/links
-POST   /api/projects/:pid/cards/:cid/links    # { target_card_id, link_type: "blocks"|"blocked_by"|"related" }
-DELETE /api/projects/:pid/cards/:cid/links/:lid
-```
-
-### Members & API Keys
-
-```
-POST   /api/projects/:pid/members             # { username, role }
-GET    /api/projects/:pid/api-keys
-POST   /api/projects/:pid/api-keys            # { label } → { key } (shown once)
-DELETE /api/projects/:pid/api-keys/:kid
-```
-
-### Bug Reports
-
-```
-POST /api/projects/:pid/bugs                  # { title, description, severity, ... }
-GET  /api/projects/:pid/bugs
-GET  /api/projects/:pid/bugs/:bid
-```
-
-### Real-Time Events
-
-```
-GET /api/projects/:pid/events                 # SSE stream
-```
-
-Events: `card_created`, `card_updated`, `card_moved`, `card_deleted`, `card_archived`, `comment_added`
-
-## Agent Integration
-
-### Setup
-
-```bash
-# Generate an API key in Settings > API Keys
-export KEY="duckllo_<your-key>"
-export PID="<project-id>"
-export URL="http://localhost:3000/api/projects/$PID"
-```
-
-### Workflow
-
-```bash
-# 1. Create a card (goes to Proposed, pending approval)
-CID=$(curl -s -X POST "$URL/cards" \
-  -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
-  -d '{"title":"Add search feature","card_type":"feature","priority":"medium"}' \
-  | jq -r '.id')
-
-# 2. After approval, pick up from Todo
-curl -s -X POST "$URL/cards/$CID/pickup" \
-  -H "Authorization: Bearer $KEY"
-
-# 3. Implement, then update with test results
-curl -s -X PATCH "$URL/cards/$CID" \
-  -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
-  -d '{"testing_status":"passing","testing_result":"10/10 tests passed"}'
-
-# 4. Upload demo media
-curl -s -X POST "$URL/cards/$CID/upload" \
-  -H "Authorization: Bearer $KEY" -F "file=@demo.gif"
-
-# 5. Move to Review
-curl -s -X POST "$URL/cards/$CID/move" \
-  -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
-  -d '{"column_name":"Review","position":0}'
-```
-
-### Watching for Tasks
-
-Use `worker.js` or poll the activity endpoint:
-
-```bash
-# Continuous watch
-node worker.js --key $KEY --project $PID
-
-# One-shot check
-node worker.js --key $KEY --project $PID --once
-```
-
-## Development
-
-### Prerequisites
-
-- Docker and Docker Compose
-- Node.js 20+ (for local development)
-
-### Local Setup
-
-```bash
-npm install
-
-# Start PostgreSQL
+# Bring up Postgres
 docker compose up db -d
 
-# Run server with auto-reload
-DB_HOST=localhost npm run dev
+# Run the server (auto-applies migrations)
+DUCKLLO_GIN_PASSWORD=changeme go run ./cmd/duckllo serve
+
+# In a second terminal: start the runner (needs an Anthropic API key)
+ANTHROPIC_API_KEY=sk-... \
+DUCKLLO_KEY=duckllo_... \
+DUCKLLO_PROJECT=<project-uuid> \
+go run ./cmd/runner
 ```
 
-### Running Tests
+Open <http://localhost:3000>. First load → register a user (becomes admin). Create a project. Compose a spec, add criteria, approve. Click **Start run** — the planner drafts a plan, the executor runs it, sensors fire. Click any screenshot tile to draw a correction box.
 
-```bash
-# E2E test suite (requires running server + Chromium)
-node test/e2e.test.js
-```
-
-Tests generate GIF recordings in `docs/gifs/`.
-
-### Project Structure
+## Components
 
 ```
-server.js              # Express API + PostgreSQL
-public/
-  index.html           # Main app UI
-  style.css            # Styles (dark/light themes)
-  app.js               # Frontend logic
-  bugs.html            # Public bug report form
-test/
-  e2e.test.js          # Puppeteer E2E suite
-worker.js              # Agent task watcher
-Dockerfile             # Node 20 slim container
-docker-compose.yml     # App + PostgreSQL stack
-CLAUDE.md              # Development rules for agents
-SKILL.md               # Full API reference for agents
+cmd/duckllo serve     coordination plane (Express analogue, Go)
+cmd/duckllo migrate   apply pending DB migrations
+cmd/runner            harness daemon — claims work, drives PEVC
+
+internal/
+  http/        chi-based REST + SSE
+  store/       data access layer (pgx + JSONB)
+  runner/
+    agent/     model provider interface + Anthropic adapter
+    client/    HTTP wrapper around the duckllo API
+    orchestrator/  PEVC phase machine
+    tools/     allow-listed exec / file IO
+  sensors/     shell + chromedp screenshot, registry
+  webui/web/   vanilla ES2022 SPA, embedded into the binary
 ```
 
-### Tech Stack
+No Node toolchain. No bundler. The Go binary embeds the entire UI; deployment is one binary plus Postgres.
 
-- **Backend**: Node.js, Express, PostgreSQL (pg driver, no ORM)
-- **Frontend**: Vanilla HTML/CSS/JS (no frameworks)
-- **Auth**: Bcrypt passwords, UUID session tokens, `duckllo_` API keys
-- **Real-time**: Server-Sent Events (SSE)
-- **Testing**: Puppeteer with GIF recording
-- **Deployment**: Docker Compose
+## Spec composer
 
-## License
+Title + intent + criteria. Each criterion is a typed sensor target — `lint`, `unit_test`, `e2e_test`, `build`, `screenshot`, `judge`, `manual`. The runner reads `sensor_kind` to decide which sensor fires.
 
-MIT
+Example:
+
+```jsonc
+{
+  "title": "Add dark-mode toggle",
+  "intent": "Add a theme switcher in the header that persists across reloads.",
+  "acceptance_criteria": [
+    {"id": "c1", "text": "lint passes",        "sensor_kind": "lint"},
+    {"id": "c2", "text": "toggle visible",     "sensor_kind": "screenshot",
+                                                "sensor_spec": {"selector": ".theme-toggle"}},
+    {"id": "c3", "text": "theme persists",     "sensor_kind": "judge"}
+  ]
+}
+```
+
+## Run dashboard
+
+Two-column live view (powered by SSE). Left: iteration timeline coloured by phase (`plan` purple, `execute` blue, `validate` amber, `correct` red). Right: sensor grid — one tile per criterion, screenshots rendered inline. Click an image tile to open the annotator.
+
+## Visual annotator
+
+`<canvas>` overlay on the screenshot. Click + drag to draw a bbox. Pick a verdict (`fix_required` | `nit` | `acceptable`) and type a comment. `fix_required` flips the run to `correcting`; the corrector agent's next bundle includes the annotation as a structured signal in its prompt.
+
+Coordinates are stored image-relative (0..1) so they survive viewport changes.
+
+## Steering loop
+
+`/projects/{pid}/steering` lets product managers edit the harness rules and topologies the runner sees on every iteration. Enable / disable individual rules, edit their bodies live, scope them to a topology. This is where humans converge the agent rather than re-reviewing every diff.
+
+## Configuration
+
+| Env var | Purpose |
+|---|---|
+| `DATABASE_URL` | Postgres DSN (default `postgres://duckllo:duckllo@localhost:5432/duckllo?sslmode=disable`) |
+| `DUCKLLO_ADDR` | HTTP listen, default `:3000` |
+| `DUCKLLO_UPLOADS` | Path for uploaded artifacts, default `uploads` |
+| `DUCKLLO_GIN_PASSWORD` | One-shot bootstrap password for the gin steward account |
+| `ANTHROPIC_API_KEY` | Used by the runner |
+| `TAILSCALE_PREAUTH_KEY` | Read but unused in Phase 1 |
+| `CONTAINER_RUNTIME` | `docker` (Phase 1) or `podman` (Phase 2 stretch) |
+
+## API reference
+
+See [SKILL.md](SKILL.md) for the full endpoint list, runner protocol, and event stream details.
+
+## Development rules
+
+See [CLAUDE.md](CLAUDE.md) for the source-of-truth rules every contributor (human or agent) must follow.
+
+## Roadmap
+
+**Phase 1 (current)** — schema, UI, runner, sensors, annotator. Runs locally.
+
+**Phase 2** — per-spec Docker workspace, Tailscale sidecar so visual sensors hit the dev server over the tailnet, baseline screenshots + pixel diff, GIF sensor.
+
+**Phase 3** — multi-provider model routing, MCP server adapter for Claude Code-native integration, harness-coverage analytics ("recurring failure" detection).

@@ -1,192 +1,152 @@
 # Duckllo Development Rules
 
-This file is the single source of truth for how any agent (Claude or otherwise) must work on this project. Every agent must read this before making changes. Violations are not acceptable.
+This file is the source of truth for how any agent (Claude or otherwise) works on this project. Read it before making changes.
 
 ## Owner Requirements (non-negotiable)
 
-- The owner's kanban account is `gin`. Never remove or demote this account.
-- All features and bugs must be tracked on the Duckllo kanban board before, during, and after development.
-- Every card must record testing results and a demo GIF that a human can read and verify.
-- The system must have an easy account system with project-based permission and API keys for agents.
-- Never break existing features. Run tests before committing.
+- The owner / system steward is `gin`. Never remove or demote this account.
+- Every unit of work is a **Spec** — a structured document with intent + typed acceptance criteria. Don't bypass the spec model with ad-hoc commits.
+- Every spec must reach `validated` (or `merged`) only after its acceptance criteria carry sensor verifications a human can read. Free-text "I tested it" is not a substitute for a verification.
+- The platform must keep an account system with project-based permission and `duckllo_*` API keys for agents.
+- Don't break existing features. Run `go vet ./...` and `go test ./...` before committing.
 
-## Kanban Workflow
+## Domain model
 
-Every piece of work follows this flow:
+```
+Spec ──► Plan(versioned) ──► Run ──► Iteration (per turn) ──► Verification (per sensor)
+                                          │                          │
+                                          └─► Annotation (human bbox+comment, on screenshots)
+```
 
-1. **Before coding**: Create a card via the API. Agent cards always go to `Proposed` (pending approval). Once the product owner approves, the card auto-moves to `Todo`. If the owner requests revision (`revision_requested`), update the card based on feedback comments and call `/repropose` to re-submit. If the card is `rejected`, do NOT re-propose — the feature is not needed.
-2. **Start work**: Use the pickup endpoint (`POST /cards/:cid/pickup`) to move the card from `Todo` to `In Progress` and assign yourself atomically. This ensures others can see who is working on what. Never leave cards in In Progress without an assignee.
-3. **While coding**: Add comments to the card describing approach, decisions, and blockers.
-4. **After coding**: Update the card with:
-   - `testing_status`: `passing`, `failing`, or `partial`
-   - `testing_result`: Paste actual test output (monospace-friendly)
-   - `demo_gif_url`: Upload a GIF or screenshot showing the feature works
-   - Related git commit hash in a comment
-5. **Submit for review**: Move card to `Review`.
-6. **Done**: Only move to `Done` after tests pass and demo media is attached.
+- **Spec** — title + intent + `acceptance_criteria[]`. Each criterion is a *typed sensor target* (`sensor_kind` ∈ lint | typecheck | unit_test | e2e_test | build | screenshot | gif | judge | manual).
+- **Plan** — versioned per spec. Plans go `draft → approved → superseded`. Only one approved plan at a time. The runner's planner agent can produce one; humans can edit a draft before approval.
+- **Run** — one execution attempt of a (spec, plan) pair. States: `queued → planning → executing → validating → correcting → done | failed | aborted`.
+- **Iteration** — one model turn during a phase. Carries provider/model/token usage and a transcript pointer.
+- **Verification** — typed sensor output. `class` is `computational | inferential | human`. Posting one with a `criterion_id` mirrors pass/fail back into the spec's criteria.
+- **Annotation** — a human's bbox+comment on a screenshot/visual_diff/gif verification. Posting one with `verdict=fix_required` flips the parent run to `correcting`; the corrector agent then includes every open annotation as a structured signal in its next prompt.
 
-Never skip steps. A card in `Done` without test results and a demo GIF is incomplete.
+## PEVC workflow (the harness loop)
 
-## Quality Gate Rules (server-enforced)
+For every spec:
 
-The server **rejects** moves to Review/Done (HTTP 422) if requirements are not met:
+1. **Compose** — UI: `/projects/{pid}/specs/new`. Title + intent + criteria (each typed). Approve.
+2. **Plan** — Click "Start run". If no approved plan exists, the run starts in the `plan` phase and the planner agent drafts + auto-approves a plan.
+3. **Execute** — Executor agent runs an inference + tool-call loop, editing files in the runner's workspace.
+4. **Validate** — Sensors fire per criterion: shell sensors for lint/test/build, chromedp screenshot for visual, LLM judge for inferential. Each posts a `Verification` row.
+5. **Correct** — Human reviews the sensor grid. Drawing a bbox + verdict on a screenshot creates an `Annotation`. `fix_required` annotations route back through the corrector agent → executor → validator.
+6. **Merge / Done** — Human marks the spec `merged` once every criterion is green and they're satisfied.
 
-### All cards need at least ONE of:
-- A **test result** (`testing_result` with actual output)
-- A **demo GIF/media** (uploaded via the card)
+Steering the loop: when an issue recurs, encode the rule in the project's harness rules (`/projects/{pid}/steering`). The runner concatenates enabled rules into every iteration's prompt — guides are how you stop chasing the same mistake.
 
-### UI/UX cards MUST have demo media:
-Cards with any of these labels **must** have a demo GIF/media — test results alone are not enough:
-`ui`, `ux`, `ui/ux`, `frontend`, `user-operation`, `user-facing`, `demo-required`
+## Quality gates
 
-### Bug fix / performance cards:
-Only need a **test result** proving the fix works.
+- A run cannot move past `validating` until at least one verification per non-`manual` criterion has been posted.
+- A run cannot transition to `done` while any criterion's `satisfied` flag is false (the sensor mirror logic in `store.CreateVerification` keeps these in sync).
+- Visual criteria (`screenshot`, `gif`, `visual_diff`) gate on artifact presence — no PNG = no pass.
+- The runner's `advance` is server-validated. Phase transitions must follow `plan → execute → validate → correct → execute` (loop) or terminate via `final_status ∈ done | failed | aborted`.
 
-### Label your cards correctly:
-- UI features, new pages, layout changes → add `ui` or `frontend` label
-- User-facing workflows → add `user-operation` label
-- Backend/API/performance/infrastructure → no special label needed (test result suffices)
+## Code style
 
-Every new project auto-creates a pinned "Quality Gate Rules" card in Backlog for reference.
+- Backend / runner: Go (1.26+). Stdlib first; pgx/v5 + chi/v5 + chromedp + bcrypt the only third-party imports. No ORMs.
+- Frontend: vanilla HTML/CSS + ES2022 JS modules served from `embed.FS`. No bundler, no Node. Don't add a framework without explicit owner approval.
+- SQL: parameterised queries always (`$1`, `$2`). Never interpolate user input.
+- Auth: bcrypt for passwords; `crypto/rand` UUIDs for tokens; API keys prefixed with `duckllo_<8hex>_<48hex>` and the prefix is indexed.
+- JSONB: store as raw bytes in models; marshal with `encoding/json`. Don't pre-decode at the row scanner.
 
-## Development Rules
+## Git
 
-### Git
-- Commit messages: short summary line, blank line, details if needed.
+- Commit messages: short summary, blank line, details if needed.
 - End every commit with `Co-Authored-By: <agent name> <noreply@anthropic.com>`.
 - One logical change per commit. Don't bundle unrelated changes.
 - Never force-push. Never amend published commits.
-- Never commit secrets, `.env` files, or database files.
+- Never commit secrets, `.env` files, or database files. `.gitignore` already excludes the common ones.
 
-### Code Style
-- Backend: Node.js + Express + PostgreSQL (pg). No ORMs.
-- Frontend: Vanilla HTML/CSS/JS in `public/`. No frameworks unless owner approves.
-- Keep it simple. No over-engineering. No premature abstraction.
-- SQL: Use parameterized queries. Never interpolate user input into SQL.
-- Auth: Bcrypt for passwords. UUID for tokens and IDs. API keys prefixed with `duckllo_`.
+## Testing
 
-### Testing
-- Run `node test/e2e.test.js` before committing any feature change.
-- For new features: add test coverage in the E2E suite or verify manually and document.
-- Test results must be human-readable. Format like:
-  ```
-  Test Suite: FeatureName
-    [PASS] test description
-    [FAIL] test description
-  X/Y passed
-  ```
+- `go vet ./...` and `go build ./...` are the floor — neither should break before commit.
+- For new features, add a Go test alongside the package. Integration tests live under `test/`.
+- Test results must be human-readable. Standard `testing.T` output is fine.
 
-### File Structure
+## Security
+
+- Never disable `authenticate` or `requireProjectAccess` for convenience.
+- API keys are project-scoped. Cross-project access is impossible by construction (the key carries `project_id`).
+- Validate user input at API boundaries; reject unknown JSON fields (`DisallowUnknownFields`).
+- File uploads: enforce size cap (`DUCKLLO_MAX_UPLOAD`) and content-type sanity.
+- The runner's `exec` tool is allow-listed. Don't add new commands to the allow-list without thinking about supply-chain risk.
+
+## File structure
+
 ```
-server.js          # Backend API (Express + PostgreSQL)
-public/            # Frontend (HTML/CSS/JS)
-  index.html
-  style.css
-  app.js
-test/              # Test suites
-  e2e.test.js      # Puppeteer E2E tests
-  demo-cdp.js      # CDP demo script
-docs/              # Documentation and media
-  FEATURES.md      # Feature documentation
-  gifs/            # E2E test GIFs
-  demo/            # CDP demo GIFs
-uploads/           # User-uploaded media (gitignored)
-Dockerfile         # App container (node:20-slim)
-docker-compose.yml # App + PostgreSQL stack
-.dockerignore      # Docker build exclusions
-SKILL.md           # API reference for agents
-CLAUDE.md          # This file - development rules
+cmd/
+  duckllo/main.go        # server entrypoint (subcommands: serve, migrate)
+  runner/main.go         # runner daemon entrypoint
+internal/
+  auth/                  # bcrypt + API-key minting
+  bootstrap/             # gin steward seeding
+  config/                # env-driven config
+  db/                    # pgxpool + embedded migrations
+  http/                  # routes, middleware, handlers, SSE
+  models/                # row structs
+  runner/
+    agent/               # provider interface + Anthropic adapter
+    client/              # HTTP wrapper around the duckllo API
+    orchestrator/        # PEVC phase machine
+    tools/               # whitelisted exec / file IO
+  sensors/               # shell + screenshot sensors, registry
+  store/                 # data access (one file per entity)
+  uploads/               # multipart artifact storage
+  webui/web/             # static HTML/CSS/JS UI, embedded
 ```
 
-### Security
-- Never disable auth middleware for convenience.
-- API keys are project-scoped. Never allow cross-project access.
-- Validate all user input at API boundaries.
-- File uploads: whitelist extensions, enforce size limits.
+## How to use the API
 
-## How to Use the Kanban API
-
-See `SKILL.md` for the full API reference. Quick version:
+See `SKILL.md` for the full reference. Quick path:
 
 ```bash
-# Your API key (get from project Settings)
 KEY="duckllo_<your-key>"
-PID="<project-id>"
+PID="<project-uuid>"
 
-# Create card before starting work
-CID=$(curl -s -X POST "http://localhost:3000/api/projects/$PID/cards" \
+# 1. Create a spec
+SID=$(curl -s -X POST http://localhost:3000/api/projects/$PID/specs \
   -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
-  -d '{"title":"...","card_type":"feature","column_name":"Todo"}' | jq -r '.id')
+  -d '{"title":"Add dark-mode toggle","intent":"Add a theme switcher in the header"}' | jq -r '.id')
 
-# Move to In Progress
-curl -s -X POST "http://localhost:3000/api/projects/$PID/cards/$CID/move" \
+# 2. Add a criterion
+curl -s -X POST http://localhost:3000/api/projects/$PID/specs/$SID/criteria \
   -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
-  -d '{"column_name":"In Progress","position":0}'
+  -d '{"text":"theme persists after reload","sensor_kind":"judge"}'
 
-# After implementing: update test results + upload demo + add commit ref
-curl -s -X PATCH "http://localhost:3000/api/projects/$PID/cards/$CID" \
-  -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
-  -d '{"testing_status":"passing","testing_result":"..."}'
+# 3. Approve + start run (planner will draft a plan if none exists)
+curl -s -X POST http://localhost:3000/api/projects/$PID/specs/$SID/approve -H "Authorization: Bearer $KEY"
+RID=$(curl -s -X POST http://localhost:3000/api/projects/$PID/specs/$SID/runs \
+  -H "Authorization: Bearer $KEY" | jq -r '.id')
 
-curl -s -X POST "http://localhost:3000/api/projects/$PID/cards/$CID/upload" \
-  -H "Authorization: Bearer $KEY" -F "file=@demo.gif"
-
-curl -s -X POST "http://localhost:3000/api/projects/$PID/cards/$CID/comments" \
-  -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
-  -d '{"content":"Git commit: abc1234 ...","comment_type":"agent_update"}'
-
-# Move to Review
-curl -s -X POST "http://localhost:3000/api/projects/$PID/cards/$CID/move" \
-  -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
-  -d '{"column_name":"Review","position":0}'
+# 4. Watch it via SSE
+curl -N "http://localhost:3000/api/projects/$PID/events?token=$KEY"
 ```
-
-## Watching the Kanban
-
-Agents should watch the kanban for new tasks assigned to them. Use `watch.js`:
-
-```bash
-# Continuous watch (prints new events every 15s)
-node watch.js --key $KEY --project $PID
-
-# One-shot check
-node watch.js --key $KEY --project $PID --once
-
-# JSON output for programmatic use
-node watch.js --key $KEY --project $PID --json --once
-```
-
-Or poll the activity API directly:
-```bash
-curl "http://localhost:3000/api/projects/$PID/activity?since=<last-check-timestamp>" \
-  -H "Authorization: Bearer $KEY"
-```
-
-See `SKILL.md` for detailed watcher documentation and integration patterns.
 
 ## Lessons Learned
 
-These are patterns discovered during development. Update this section as new lessons emerge.
+Patterns discovered during development. Update this section as new ones emerge.
 
-- **Puppeteer + modals**: `waitForSelector` with `{ visible: true }` doesn't work reliably for elements toggled via `style.display`. Use `waitForFunction` to check computed display instead.
-- **Puppeteer + form submission**: `page.type()` can race with modal transitions. Prefer `page.evaluate()` to set values directly for reliability. Use `page.type()` only when you need visible typing for demos.
-- **PostgreSQL JSONB**: `columns_config`, `labels`, and `permissions` are JSONB columns — the `pg` driver returns native JS objects/arrays, no `JSON.parse()` needed on reads. Always `JSON.stringify()` when inserting.
-- **PostgreSQL transactions**: Use `const client = await pool.connect()` then `client.query('BEGIN')` / `COMMIT` / `ROLLBACK` for multi-step operations like card moves.
-- **API key auth**: Bcrypt comparison for every request is slow with many keys. If this becomes a bottleneck, add a key prefix index to narrow the search.
-- **GIF recording**: Use `gif-encoder-2` with `neuquant` algorithm and quality 10 for good size/quality balance. Capture PNGs, decode with `pngjs`, then encode.
-- **CDP testing**: Always use a unique `--user-data-dir` per test run to avoid conflicts with other Chrome sessions. Connect via `puppeteer.connect({ browserURL })` to reuse an existing Chromium instance.
-- **Background server**: Use `nohup node server.js > /tmp/duckllo.log 2>&1 &` to keep it alive. The `run_in_background` tool parameter causes the process to exit when output stream closes.
+- **chromedp + Chrome path**: on macOS, set `--chrome-path` to `/Applications/Google Chrome.app/Contents/MacOS/Google Chrome` if the default exec allocator can't find Chromium.
+- **pgx JSONB**: keep raw `[]byte` in model fields and let handlers `json.Marshal/Unmarshal` on the boundary; this avoids double-encoding bugs and keeps the row scan dumb.
+- **Sliding session**: TouchSession is throttled — bumps `expires_at` only when remaining lease < TTL − 24h, so it's effectively one UPDATE per session per day even on chatty UIs.
+- **work_queue claim**: `FOR UPDATE SKIP LOCKED` is the right primitive; without it two runners polling at the same instant will conflict on the same row.
+- **Heartbeat lease**: 90s. The runner heartbeats every 30s. If the runner dies, another runner can reclaim after 90s lapses.
+- **API key prefix index**: bcrypt-comparing every key on every request is slow; the indexed `key_prefix` narrows lookups to O(1).
 
-## Agent Checklist
+## Agent checklist
 
 Before submitting any work, verify:
 
-- [ ] Card exists on kanban for this work
-- [ ] Card has testing_status set (passing/failing/partial)
-- [ ] Card has testing_result with actual test output
-- [ ] Card has a demo GIF uploaded
-- [ ] Card has a comment with the git commit hash
-- [ ] Card is in the correct column (Review or Done)
-- [ ] All existing E2E tests still pass
-- [ ] Code committed with descriptive message and co-author line
-- [ ] No secrets or database files in the commit
+- [ ] A spec exists for the change (or the change is a doc/infra-only commit explicitly noted in the message)
+- [ ] All criteria carry a verification (or are explicitly `manual` and noted)
+- [ ] No criterion in `fail` status without a follow-up plan
+- [ ] `go vet ./...` clean
+- [ ] `go build ./...` clean
+- [ ] Existing tests still pass
+- [ ] Commit ends with `Co-Authored-By` line
+- [ ] No secrets or DB files in the diff
+- [ ] If the spec touched UI, a screenshot verification exists
