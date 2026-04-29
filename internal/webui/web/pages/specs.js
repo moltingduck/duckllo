@@ -22,6 +22,9 @@ export async function render(mount, params) {
     filterRow.appendChild(el("button", { class: "secondary", "data-status": s }, s));
   }
   filterRow.appendChild(el("span", { class: "spacer" }));
+  const steeringBtn = el("button", { class: "secondary" }, "Steering");
+  steeringBtn.addEventListener("click", () => go(`/projects/${pid}/steering`));
+  filterRow.appendChild(steeringBtn);
   const newBtn = el("button", {}, "New spec");
   newBtn.addEventListener("click", () => go(`/projects/${pid}/specs/new`));
   filterRow.appendChild(newBtn);
