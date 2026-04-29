@@ -57,10 +57,16 @@ build:
 test:
 	@if [ -z "$$TEST_DATABASE_URL" ]; then \
 		echo "TEST_DATABASE_URL not set — pointing at default localhost:5432"; \
-		TEST_DATABASE_URL='postgres://duckllo:duckllo@localhost:5432/duckllo?sslmode=disable' go test ./...; \
+		TEST_DATABASE_URL='postgres://duckllo:duckllo@localhost:5432/duckllo?sslmode=disable' \
+			go test -p 1 ./...; \
 	else \
-		go test ./...; \
+		go test -p 1 ./...; \
 	fi
+	@# -p 1 forces serial test-package execution. Multiple packages
+	@# (internal/http and internal/selfhost) wipe + re-migrate the same
+	@# DB; running them concurrently corrupts state. -count would also
+	@# defeat the test cache; we keep the cache so re-runs are fast,
+	@# only forcing serial when actually executing.
 
 vet:
 	go vet ./...
