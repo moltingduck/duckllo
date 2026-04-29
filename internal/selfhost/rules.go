@@ -135,4 +135,28 @@ single fenced JSON block with shape
 and nothing else. Ambient prose breaks the parser; missing fields
 silently demote the run to status=warn.`,
 	},
+	{
+		Kind: "judge_prompt",
+		Name: "Trust the workspace diff, not the executor's claims",
+		Body: `The "## Workspace changes" section in your prompt is the
+output of  ` + "`git diff --no-color`" + `  inside the workspace right after
+the executor finished. That diff is the ground truth of what happened
+this iteration — base your verdict on it, not on the executor's
+self-reported summary. The executor has been observed claiming files
+were created when they weren't (see commit 28ae6eb).
+
+If the diff is empty or doesn't contain the changes the criterion
+demands, the verdict is fail (or warn, if you genuinely can't tell
+from the diff alone).`,
+	},
+	{
+		Kind: "agents_md",
+		Name: "claude-code provider needs --permission-mode acceptEdits",
+		Body: `When the duckllo client drives Claude Code (provider=claude-code),
+the executor's prompt is sent to the ` + "`claude -p`" + ` subprocess. In
+non-interactive print mode, file-editing tools prompt by default and
+Claude Code will *describe* the change instead of making it. The
+provider's default Args ship with --permission-mode acceptEdits; do
+not strip it. See commit 28ae6eb for the bug-fix pair.`,
+	},
 }
