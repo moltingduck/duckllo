@@ -19,9 +19,11 @@ export async function render(mount, params) {
 
   const tabRow = el("div", { class: "row", style: "gap:8px;margin-bottom:16px" });
   const tRules = el("button", {}, "Harness rules");
-  const tTopo = el("button", { class: "secondary" }, "Topologies");
+  const tTopo  = el("button", { class: "secondary" }, "Topologies");
+  const tKeys  = el("button", { class: "secondary" }, "API keys");
   tabRow.appendChild(tRules);
   tabRow.appendChild(tTopo);
+  tabRow.appendChild(tKeys);
   tabRow.appendChild(el("span", { class: "spacer" }));
   const back = el("button", { class: "secondary" }, "Back to specs");
   back.addEventListener("click", () => go(`/projects/${pid}/specs`));
@@ -32,11 +34,13 @@ export async function render(mount, params) {
   mount.appendChild(body);
 
   function setTab(active) {
-    tRules.className = active === "rules" ? "" : "secondary";
-    tTopo.className = active === "topologies" ? "" : "secondary";
+    tRules.className = active === "rules"      ? "" : "secondary";
+    tTopo.className  = active === "topologies" ? "" : "secondary";
+    tKeys.className  = active === "keys"       ? "" : "secondary";
   }
-  tRules.addEventListener("click", () => { setTab("rules"); renderRules(body, pid); });
+  tRules.addEventListener("click", () => { setTab("rules");      renderRules(body, pid); });
   tTopo.addEventListener("click",  () => { setTab("topologies"); renderTopologies(body, pid); });
+  tKeys.addEventListener("click",  () => { setTab("keys");       renderKeys(body, pid, project.name); });
 
   setTab("rules");
   renderRules(body, pid);
@@ -168,6 +172,99 @@ async function renderTopologies(mount, pid) {
     el("label", {}, "Description"), descInput,
     el("div", { style: "margin-top:10px" }, create),
   ]));
+}
+
+async function renderKeys(mount, pid, projectName) {
+  mount.innerHTML = '<p class="loading">Loading keys…</p>';
+  const keys = await get(`/api/projects/${pid}/api-keys`);
+
+  mount.innerHTML = "";
+  mount.appendChild(el("h2", {}, "API keys"));
+  mount.appendChild(el("p", { class: "muted" },
+    "Project-scoped tokens for the runner and any other automation. Plaintext is shown once at mint and never again — copy it straight into your .duckllo.env."));
+
+  if (keys.length === 0) {
+    mount.appendChild(el("p", { class: "empty" }, "No keys yet. Mint one below."));
+  } else {
+    const list = el("div", { class: "spec-list" });
+    for (const k of keys) {
+      const row = el("div", { class: "card" }, [
+        el("div", { class: "row" }, [
+          el("strong", {}, k.label || el("span", { class: "muted" }, "(unlabeled)")),
+          el("span", { class: "spacer" }),
+          el("span", { class: "pill mono" }, k.key_prefix + "…"),
+          el("button", { class: "danger" }, "Revoke"),
+        ]),
+        el("div", { class: "muted mono", style: "font-size:11px;margin-top:4px" },
+          `created ${new Date(k.created_at).toLocaleString()}` +
+          (k.last_used_at ? ` · last used ${new Date(k.last_used_at).toLocaleString()}` : " · never used")),
+      ]);
+      const [revoke] = row.querySelectorAll("button.danger");
+      revoke.addEventListener("click", async () => {
+        if (!confirm(`Revoke key ${k.key_prefix}…? Any runner using it will start failing on next request.`)) return;
+        try {
+          await del(`/api/projects/${pid}/api-keys/${k.id}`);
+          toast("Revoked");
+          renderKeys(mount, pid, projectName);
+        } catch (err) { toast(err.message, "error"); }
+      });
+      list.appendChild(row);
+    }
+    mount.appendChild(list);
+  }
+
+  // Mint form.
+  mount.appendChild(el("h2", { style: "margin-top:24px" }, "Mint a new key"));
+  const labelInput = el("input", { type: "text", placeholder: "e.g. mac-mini runner" });
+  const create = el("button", {}, "Mint key");
+  const mintCard = el("div", { class: "card", style: "max-width:520px" }, [
+    el("label", {}, "Label"), labelInput,
+    el("div", { style: "margin-top:10px" }, create),
+  ]);
+  mount.appendChild(mintCard);
+
+  create.addEventListener("click", async () => {
+    if (!labelInput.value.trim()) return toast("Label required", "error");
+    let resp;
+    try {
+      resp = await post(`/api/projects/${pid}/api-keys`, { label: labelInput.value.trim() });
+    } catch (err) { return toast(err.message, "error"); }
+
+    // Show the plaintext key + a copy-paste snippet for .duckllo.env. Once
+    // the user dismisses this card the plaintext is gone for good.
+    const snippet =
+      `# duckllo runner credentials for ${projectName}\n` +
+      `DUCKLLO_URL=${location.origin}\n` +
+      `DUCKLLO_PROJECT=${pid}\n` +
+      `DUCKLLO_KEY=${resp.plain}\n` +
+      `# Add your Anthropic key:\n` +
+      `# ANTHROPIC_API_KEY=sk-...\n`;
+
+    const reveal = el("div", { class: "card", style: "border-color:var(--accent);margin-top:12px" }, [
+      el("h3", { style: "margin-top:0" }, "Key minted — copy it now"),
+      el("p", { class: "muted" }, "This is the only time the plaintext key is visible. Paste the snippet below into your .duckllo.env."),
+      el("textarea", { rows: "8", readonly: "", style: "font-family:var(--mono);font-size:12px" }),
+      el("div", { class: "row", style: "gap:8px;margin-top:8px" }, [
+        el("button", {}, "Copy to clipboard"),
+        el("button", { class: "secondary" }, "Done — refresh list"),
+      ]),
+    ]);
+    const ta = reveal.querySelector("textarea");
+    ta.value = snippet;
+    const [copyBtn, doneBtn] = reveal.querySelectorAll("button");
+    copyBtn.addEventListener("click", async () => {
+      try {
+        await navigator.clipboard.writeText(snippet);
+        toast("Copied to clipboard");
+      } catch (_) {
+        ta.select();
+        toast("Select-all + copy manually");
+      }
+    });
+    doneBtn.addEventListener("click", () => renderKeys(mount, pid, projectName));
+    mintCard.after(reveal);
+    labelInput.value = "";
+  });
 }
 
 // silence unused import lint until escapeHTML is used here.
