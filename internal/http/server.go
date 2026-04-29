@@ -48,6 +48,13 @@ func NewServer(cfg *config.Config, pool *pgxpool.Pool) *Server {
 // to plug the routes into httptest without spinning a real listener.
 func (s *Server) Handler() http.Handler { return s.routes() }
 
+// SetSuggestProvider swaps the LLM provider used by /specs/refine and
+// /specs/suggest. Exposed so integration tests can inject a deterministic
+// fake instead of shelling out to the real claude CLI / Anthropic API.
+// Production callers should not use this — NewServer wires the right
+// provider from config at startup.
+func (s *Server) SetSuggestProvider(p agent.Provider) { s.provider = p }
+
 // selectSuggestProvider picks the agent.Provider for the spec composer's
 // suggest affordance. Honoured in this order:
 //

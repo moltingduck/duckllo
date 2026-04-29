@@ -32,7 +32,31 @@ import (
 	"github.com/moltingduck/duckllo/internal/config"
 	"github.com/moltingduck/duckllo/internal/db"
 	httpapi "github.com/moltingduck/duckllo/internal/http"
+	"github.com/moltingduck/duckllo/internal/runner/agent"
 )
+
+// scriptedProvider is a deterministic agent.Provider for tests of the
+// suggest endpoints. It checks the system-prompt prefix to tell which
+// pass it's in (refine vs criteria) and returns a canned fenced-JSON
+// block — exactly the shape the suggest package's parsers expect.
+// Records the captured prompts so tests can assert (a) that the user
+// content reached the model and (b) that QA pairs were folded in.
+type scriptedProvider struct {
+	refineJSON   string
+	criteriaJSON string
+	captured     []agent.Request
+}
+
+func (s *scriptedProvider) Name() string         { return "scripted" }
+func (s *scriptedProvider) DefaultModel() string { return "scripted" }
+func (s *scriptedProvider) Complete(_ context.Context, req agent.Request) (*agent.Response, error) {
+	s.captured = append(s.captured, req)
+	body := s.criteriaJSON
+	if strings.Contains(req.System, "REFINE") {
+		body = s.refineJSON
+	}
+	return &agent.Response{Text: "```json\n" + body + "\n```", StopReason: "end_turn"}, nil
+}
 
 func TestHarnessFlow(t *testing.T) {
 	dsn := os.Getenv("TEST_DATABASE_URL")
@@ -689,6 +713,7 @@ type testEnv struct {
 	pid      string
 	runnerID string
 	apiKey   string // duckllo_<...> bearer for runner-side calls
+	srv      *httpapi.Server
 }
 
 func setupTestEnv(t *testing.T) *testEnv {
@@ -744,7 +769,7 @@ func setupTestEnv(t *testing.T) *testEnv {
 	}, &keyResp, http.StatusCreated)
 
 	return &testEnv{
-		c: c, pool: pool, baseURL: ts.URL,
+		c: c, pool: pool, baseURL: ts.URL, srv: srv,
 		pid: pid, runnerID: "test-runner-1", apiKey: keyResp.Plain,
 	}
 }
@@ -928,6 +953,138 @@ func TestPlanApproval_AgentCanApproveOwnPlan(t *testing.T) {
 	// Agent approves its own plan — must succeed.
 	e.c.do("POST", "/api/projects/"+e.pid+"/plans/"+pid+"/approve", e.apiKey,
 		nil, nil, http.StatusOK)
+}
+
+// TestSuggest_NoProvider503 covers the cold path: when the server has
+// no LLM provider wired (no ANTHROPIC_API_KEY, no claude CLI), both
+// /specs/refine and /specs/suggest must return 503 with a clear message
+// instead of erroring opaquely. setupTestEnv leaves provider unset by
+// default so this is the natural state.
+func TestSuggest_NoProvider503(t *testing.T) {
+	e := setupTestEnv(t)
+	// setupTestEnv may auto-detect a real provider (e.g. the claude CLI
+	// on PATH on a developer's machine) — force the no-provider state
+	// for this test so the assertion isn't environment-dependent.
+	e.srv.SetSuggestProvider(nil)
+
+	for _, path := range []string{"/specs/refine", "/specs/suggest"} {
+		res := e.c.raw("POST", "/api/projects/"+e.pid+path, e.c.token,
+			map[string]any{"title": "x", "intent": "y"})
+		if res.StatusCode != http.StatusServiceUnavailable {
+			body, _ := io.ReadAll(res.Body)
+			res.Body.Close()
+			t.Errorf("%s with no provider: got %d, want 503: %s", path, res.StatusCode, body)
+			continue
+		}
+		res.Body.Close()
+	}
+}
+
+// TestSuggest_TwoStepFlow walks the full refine → suggest sequence
+// against a deterministic scripted provider. Asserts:
+//   - /specs/refine returns the refined draft + structured questions
+//     (with options) the spec composer's UI consumes
+//   - /specs/suggest takes the refined draft + qa pairs and produces
+//     well-typed criteria
+//   - QA answers actually reach the second-pass prompt (so the user's
+//     clarifying answers influence what the model proposes)
+//   - invalid sensor_kinds in the model output get filtered out
+//     (defence against the model hallucinating a kind we can't run)
+func TestSuggest_TwoStepFlow(t *testing.T) {
+	e := setupTestEnv(t)
+
+	prov := &scriptedProvider{
+		refineJSON: `{
+		  "refined_title": "Add a dark-mode theme toggle",
+		  "refined_intent": "Let users switch between light and dark themes from the header. The choice persists across reloads. Success means every page renders correctly in both palettes.",
+		  "questions": [
+		    {"question": "How should the choice persist?", "options": ["Per device, localStorage", "Synced per account"]},
+		    {"question": "Is mobile in scope?", "options": ["Yes", "No"]},
+		    {"question": "What's the default?", "options": []}
+		  ]
+		}`,
+		criteriaJSON: `{
+		  "criteria": [
+		    {"text": "header shows a theme toggle button", "sensor_kind": "screenshot"},
+		    {"text": "toggle swaps the active theme", "sensor_kind": "e2e_test"},
+		    {"text": "choice persists after reload", "sensor_kind": "e2e_test"},
+		    {"text": "rationale: contrast and palette", "sensor_kind": "judge"},
+		    {"text": "this should be skipped", "sensor_kind": "not_a_real_kind"}
+		  ]
+		}`,
+	}
+	e.srv.SetSuggestProvider(prov)
+
+	// Step 1 — refine.
+	var refined map[string]any
+	e.c.do("POST", "/api/projects/"+e.pid+"/specs/refine", e.c.token,
+		map[string]any{"title": "add dark mode", "intent": "users want a dark theme"},
+		&refined, http.StatusOK)
+	if got := refined["refined_title"]; got != "Add a dark-mode theme toggle" {
+		t.Errorf("refined_title: got %v", got)
+	}
+	qs, ok := refined["questions"].([]any)
+	if !ok || len(qs) != 3 {
+		t.Fatalf("questions: got %v want 3 entries", refined["questions"])
+	}
+	q0 := qs[0].(map[string]any)
+	if q0["question"] != "How should the choice persist?" {
+		t.Errorf("first question text: got %v", q0["question"])
+	}
+	opts, _ := q0["options"].([]any)
+	if len(opts) != 2 || opts[0] != "Per device, localStorage" {
+		t.Errorf("first question options: got %v", opts)
+	}
+
+	// The third question deliberately has no options — assert UI gets
+	// an empty array, not null, so its renderer doesn't NPE.
+	q2 := qs[2].(map[string]any)
+	emptyOpts, _ := q2["options"].([]any)
+	if len(emptyOpts) != 0 {
+		t.Errorf("open-ended question should have empty options; got %v", emptyOpts)
+	}
+
+	// Step 2 — suggest, with the user's answers folded in as qa.
+	var sugg map[string]any
+	e.c.do("POST", "/api/projects/"+e.pid+"/specs/suggest", e.c.token,
+		map[string]any{
+			"title":  refined["refined_title"],
+			"intent": refined["refined_intent"],
+			"qa": []map[string]any{
+				{"q": "How should the choice persist?", "a": "Per device, localStorage"},
+				{"q": "Is mobile in scope?", "a": "Yes"},
+				{"q": "What's the default?", "a": "follow OS preference"},
+			},
+		}, &sugg, http.StatusOK)
+
+	crits, _ := sugg["criteria"].([]any)
+	// Five returned, one (not_a_real_kind) is filtered out → 4 left.
+	if len(crits) != 4 {
+		t.Fatalf("criteria count: got %d want 4 (one invalid kind should be dropped)", len(crits))
+	}
+	first := crits[0].(map[string]any)
+	if first["sensor_kind"] != "screenshot" || first["text"] != "header shows a theme toggle button" {
+		t.Errorf("first criterion: got %v", first)
+	}
+
+	// Two requests captured: one with the refine system prompt, one
+	// with the criteria system prompt. The criteria call's user text
+	// must include the user's clarifying answers — otherwise the
+	// two-step flow has no point.
+	if len(prov.captured) != 2 {
+		t.Fatalf("expected 2 provider calls, got %d", len(prov.captured))
+	}
+	if !strings.Contains(prov.captured[0].System, "REFINE") {
+		t.Errorf("first call should be the refine pass; got system=%q",
+			prov.captured[0].System[:min(80, len(prov.captured[0].System))])
+	}
+	criteriaUser := prov.captured[1].Messages[0].Content
+	if !strings.Contains(criteriaUser, "Per device, localStorage") {
+		t.Errorf("criteria user prompt did not include the user's QA answer; got:\n%s", criteriaUser)
+	}
+	if !strings.Contains(criteriaUser, "follow OS preference") {
+		t.Errorf("criteria user prompt missing free-text answer for open-ended question:\n%s", criteriaUser)
+	}
 }
 
 // TestSpecContract_FrozenAfterApproval enforces the selfhost rule
