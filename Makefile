@@ -1,4 +1,4 @@
-.PHONY: help setup db serve runner selfhost build test vet fmt clean
+.PHONY: help setup db serve runner runner-once selfhost dogfood-smoke build test vet fmt clean
 
 help:
 	@echo "duckllo development targets"
@@ -39,6 +39,14 @@ runner:
 #   make selfhost && make serve & make runner-once
 runner-once:
 	go run ./cmd/runner --exit-when-idle
+
+# Full duckllo-on-duckllo smoke: spins up Postgres + server, runs
+# selfhost, clones the repo into a scratch workspace, creates a
+# trivial spec, drives the runner with claude-code, asserts the
+# expected file change happened. Tears everything down on exit.
+# Requires: docker, the `claude` CLI on PATH and logged in.
+dogfood-smoke:
+	./scripts/dogfood-smoke.sh
 
 build:
 	mkdir -p bin
