@@ -30,6 +30,13 @@ type Orchestrator struct {
 	Workspace      string // host fallback dir
 	ContainerImage string // when set, runs each spec in its own container
 
+	// Tailscale sidecar config. When TailscalePreauthKey is set the
+	// per-run pod gets a tailscale container sharing the workspace's
+	// netns, and screenshot sensors hit the MagicDNS hostname instead of
+	// localhost.
+	TailscalePreauthKey string
+	TailscaleImage      string
+
 	// Per-Run() state. Set in Run() before phase dispatch so the phase
 	// methods can pick up the right Sandbox + dev URL.
 	sandbox      *tools.Sandbox
@@ -88,21 +95,39 @@ func (o *Orchestrator) openWorkspace(ctx context.Context, run *client.Run) (work
 
 	name := "duckllo-" + shortID(run.ID)
 	de := workspace.NewDocker(o.ContainerImage, name, nil, nil)
+	if o.TailscalePreauthKey != "" {
+		de.TailscalePreauthKey = o.TailscalePreauthKey
+		de.TailscaleHostname = name
+		if o.TailscaleImage != "" {
+			de.TailscaleImage = o.TailscaleImage
+		}
+	}
 	if err := de.Provision(ctx); err != nil {
 		return nil, "", nil, err
 	}
-	// Persist what we know to the server so sensors fetched via bundle can
-	// find the dev URL etc. Phase 1 dev URL is empty; Phase 2 (Tailscale
-	// sidecar) populates it.
+
+	devURL := ""
+	if de.TailscaleHost() != "" {
+		// Sensors append the port from sensor_spec.url (e.g. ":8080/path").
+		// We hand them the bare http://hostname so a sensor_spec.url of
+		// ":8080/" composes correctly.
+		devURL = "http://" + de.TailscaleHost()
+	}
+
 	meta := map[string]any{
 		"kind":         "docker",
 		"container_id": de.ID(),
 		"workspace":    de.WorkspacePath(),
 	}
+	if de.TailscaleID() != "" {
+		meta["tailscale_node"] = de.TailscaleID()
+		meta["tailscale_host"] = de.TailscaleHost()
+		meta["dev_url"] = devURL
+	}
 	if err := o.Client.SetWorkspaceMeta(ctx, run.ID, meta); err != nil {
 		log.Printf("workspace: SetWorkspaceMeta: %v", err)
 	}
-	return de, "", de.Close, nil
+	return de, devURL, de.Close, nil
 }
 
 // runShouldTearDown checks whether the run has reached a terminal state

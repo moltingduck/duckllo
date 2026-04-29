@@ -52,7 +52,9 @@ func main() {
 		once        = flag.Bool("once", false, "claim and process exactly one work item then exit")
 		devURL      = flag.String("dev-url", env("DUCKLLO_DEV_URL", ""), "base URL of the dev server, used by screenshot sensor")
 		chromePath  = flag.String("chrome-path", env("DUCKLLO_CHROME_PATH", ""), "override Chrome/Chromium binary path")
-		image       = flag.String("container-image", env("DUCKLLO_CONTAINER_IMAGE", ""), "Docker image for per-run workspaces (empty = run on host)")
+		image          = flag.String("container-image", env("DUCKLLO_CONTAINER_IMAGE", ""), "Docker image for per-run workspaces (empty = run on host)")
+		tailscaleKey   = flag.String("tailscale-preauth-key", env("TAILSCALE_PREAUTH_KEY", ""), "Tailscale preauth key for the per-run sidecar (empty = no sidecar)")
+		tailscaleImage = flag.String("tailscale-image", env("DUCKLLO_TAILSCALE_IMAGE", "tailscale/tailscale:latest"), "Tailscale sidecar image")
 	)
 	flag.Parse()
 
@@ -80,18 +82,23 @@ func main() {
 
 	o := &orchestrator.Orchestrator{
 		Client: c, Provider: prov,
-		Sensors:    sensors.DefaultRegistry(),
-		RunnerID:   *runnerID,
-		MaxTurns:   12,
-		DevURL:     *devURL,
-		ChromePath: *chromePath,
-		Workspace:  *workspaceDir,
-		ContainerImage: *image,
+		Sensors:             sensors.DefaultRegistry(),
+		RunnerID:            *runnerID,
+		MaxTurns:            12,
+		DevURL:              *devURL,
+		ChromePath:          *chromePath,
+		Workspace:           *workspaceDir,
+		ContainerImage:      *image,
+		TailscalePreauthKey: *tailscaleKey,
+		TailscaleImage:      *tailscaleImage,
 	}
 
 	mode := "host"
 	if *image != "" {
 		mode = "docker:" + *image
+		if *tailscaleKey != "" {
+			mode += " +tailscale"
+		}
 	}
 	log.Printf("runner %s up — url=%s project=%s roles=%v workspace=%s mode=%s model=%s",
 		*runnerID, *baseURL, *projectID, roles, *workspaceDir, mode, prov.DefaultModel())

@@ -29,7 +29,18 @@ type DockerExecutor struct {
 	ExtraDockerArgs []string // e.g. --network duckllo-spec-<id>, mounts, etc.
 	ExecTimeout    time.Duration
 
-	containerID string
+	// Tailscale sidecar configuration. When TailscalePreauthKey is set,
+	// Provision also starts a Tailscale container sharing this container's
+	// network namespace, so the tailnet sees the workspace's services
+	// under TailscaleHostname.<tailnet>.ts.net.
+	TailscalePreauthKey string
+	TailscaleHostname   string // typically duckllo-<short-run-id>
+	TailscaleImage      string // default tailscale/tailscale:latest
+	TailscaleExtraEnv   []string
+
+	containerID    string
+	tailscaleID    string
+	tailscaleHost  string
 }
 
 // NewDocker is the constructor. Callers fill the fields and call
@@ -43,8 +54,15 @@ func NewDocker(image, name string, env, extra []string) *DockerExecutor {
 		Env:             env,
 		ExtraDockerArgs: extra,
 		ExecTimeout:     5 * time.Minute,
+		TailscaleImage:  "tailscale/tailscale:latest",
 	}
 }
+
+// TailscaleHost returns the MagicDNS-style host the workspace is reachable
+// at (TailscaleHostname only — callers append :port). Empty until a
+// tailscale sidecar has been provisioned.
+func (d *DockerExecutor) TailscaleHost() string { return d.tailscaleHost }
+func (d *DockerExecutor) TailscaleID() string   { return d.tailscaleID }
 
 func (d *DockerExecutor) Kind() string        { return "docker" }
 func (d *DockerExecutor) ID() string          { return d.containerID }
@@ -97,7 +115,85 @@ func (d *DockerExecutor) Provision(ctx context.Context) error {
 		return fmt.Errorf("docker run: %w (%s)", err, strings.TrimSpace(string(out)))
 	}
 	d.containerID = strings.TrimSpace(string(out))
+
+	if err := d.provisionTailscale(ctx); err != nil {
+		// Roll back the workspace container so we don't leak a half-set-up
+		// pod the next reclaim will adopt-and-fail on.
+		_, _ = d.docker(ctx, "rm", "-f", d.containerID)
+		d.containerID = ""
+		return fmt.Errorf("tailscale sidecar: %w", err)
+	}
 	return nil
+}
+
+// provisionTailscale starts a tailscale sidecar that shares the workspace
+// container's network namespace. The tailnet then sees the workspace's
+// listening services under TailscaleHostname.<tailnet>.ts.net.
+//
+// We assume the operator has put a tag-scoped preauth key in
+// TAILSCALE_PREAUTH_KEY (configured per the deployment plan); duckllo
+// neither mints nor rotates the key.
+func (d *DockerExecutor) provisionTailscale(ctx context.Context) error {
+	if d.TailscalePreauthKey == "" {
+		return nil // host-only mode for screenshots; sensors fall back to localhost
+	}
+	if d.TailscaleHostname == "" {
+		d.TailscaleHostname = d.ContainerName
+	}
+	sidecarName := d.ContainerName + "-ts"
+
+	// Adopt an existing sidecar if it's already running (runner restart).
+	if id, err := d.lookupGenericByName(ctx, sidecarName); err != nil {
+		return err
+	} else if id != "" {
+		state, err := d.inspectState(ctx, id)
+		if err != nil {
+			return err
+		}
+		d.tailscaleID = id
+		if state != "running" {
+			if _, err := d.docker(ctx, "start", id); err != nil {
+				return fmt.Errorf("start existing tailscale sidecar: %w", err)
+			}
+		}
+		d.tailscaleHost = d.TailscaleHostname
+		return nil
+	}
+
+	args := []string{
+		"run", "-d",
+		"--name", sidecarName,
+		"--label", "duckllo.workspace=tailscale",
+		"--network", "container:" + d.containerID,
+		"-e", "TS_AUTHKEY=" + d.TailscalePreauthKey,
+		"-e", "TS_HOSTNAME=" + d.TailscaleHostname,
+		"-e", "TS_STATE_DIR=/var/lib/tailscale",
+		"-e", "TS_USERSPACE=true",
+		"-e", "TS_EXTRA_ARGS=--accept-dns=true",
+	}
+	for _, e := range d.TailscaleExtraEnv {
+		args = append(args, "-e", e)
+	}
+	args = append(args, d.TailscaleImage)
+
+	out, err := d.docker(ctx, args...)
+	if err != nil {
+		return fmt.Errorf("docker run tailscale: %w (%s)", err, strings.TrimSpace(string(out)))
+	}
+	d.tailscaleID = strings.TrimSpace(string(out))
+	d.tailscaleHost = d.TailscaleHostname
+	return nil
+}
+
+// lookupGenericByName is the same shape as lookupByName but takes the name
+// instead of using the executor's primary container's name. Used for the
+// tailscale sidecar.
+func (d *DockerExecutor) lookupGenericByName(ctx context.Context, name string) (string, error) {
+	out, err := d.docker(ctx, "ps", "-a", "--filter", "name=^/"+name+"$", "--format", "{{.ID}}")
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(out)), nil
 }
 
 // lookupByName returns "" if no container with the given name exists.
@@ -118,6 +214,12 @@ func (d *DockerExecutor) inspectState(ctx context.Context, id string) (string, e
 }
 
 func (d *DockerExecutor) Close(ctx context.Context) error {
+	// Tear down the sidecar first; the workspace container's netns may go
+	// with it depending on docker rules.
+	if d.tailscaleID != "" {
+		_, _ = d.docker(ctx, "rm", "-f", d.tailscaleID)
+		d.tailscaleID = ""
+	}
 	if d.containerID == "" {
 		return nil
 	}
