@@ -20,9 +20,11 @@ export async function render(mount, params) {
   const tabRow = el("div", { class: "row", style: "gap:8px;margin-bottom:16px" });
   const tRules = el("button", {}, "Harness rules");
   const tTopo  = el("button", { class: "secondary" }, "Topologies");
+  const tFails = el("button", { class: "secondary" }, "Recurring failures");
   const tKeys  = el("button", { class: "secondary" }, "API keys");
   tabRow.appendChild(tRules);
   tabRow.appendChild(tTopo);
+  tabRow.appendChild(tFails);
   tabRow.appendChild(tKeys);
   tabRow.appendChild(el("span", { class: "spacer" }));
   const back = el("button", { class: "secondary" }, "Back to specs");
@@ -36,14 +38,78 @@ export async function render(mount, params) {
   function setTab(active) {
     tRules.className = active === "rules"      ? "" : "secondary";
     tTopo.className  = active === "topologies" ? "" : "secondary";
+    tFails.className = active === "fails"      ? "" : "secondary";
     tKeys.className  = active === "keys"       ? "" : "secondary";
   }
   tRules.addEventListener("click", () => { setTab("rules");      renderRules(body, pid); });
   tTopo.addEventListener("click",  () => { setTab("topologies"); renderTopologies(body, pid); });
+  tFails.addEventListener("click", () => { setTab("fails");      renderRecurring(body, pid); });
   tKeys.addEventListener("click",  () => { setTab("keys");       renderKeys(body, pid, project.name); });
 
   setTab("rules");
   renderRules(body, pid);
+}
+
+async function renderRecurring(mount, pid) {
+  mount.innerHTML = '<p class="loading">Loading recurring failures…</p>';
+  const fails = await get(`/api/projects/${pid}/steering/recurring-failures`);
+
+  mount.innerHTML = "";
+  mount.appendChild(el("h2", {}, "Recurring failures"));
+  mount.appendChild(el("p", { class: "muted" },
+    "Criteria that have failed or warned at least twice in the last 30 days. Each row is a signal that an inferential or computational sensor isn't catching the underlying pattern early — encode the lesson as a harness rule rather than retrying."));
+
+  if (fails.length === 0) {
+    mount.appendChild(el("p", { class: "empty" },
+      "No recurring failures yet. Run a few specs and the steering loop will populate."));
+    return;
+  }
+
+  const list = el("div", { class: "spec-list" });
+  for (const f of fails) {
+    const row = el("div", { class: "card" }, [
+      el("div", { class: "row" }, [
+        el("strong", {}, f.spec_title),
+        el("span", { class: "spacer" }),
+        el("span", { class: "pill mono" }, f.kind),
+        el("span", { class: "pill fail" }, f.fail_count + "× failed"),
+      ]),
+      el("p", { style: "margin:6px 0" }, f.criterion_text || "(criterion deleted)"),
+      f.last_summary
+        ? el("p", { class: "muted mono", style: "font-size:11px;white-space:pre-wrap" },
+            "last: " + f.last_summary)
+        : null,
+      el("div", { class: "row", style: "gap:8px;margin-top:6px" }, [
+        el("span", { class: "muted mono", style: "font-size:11px" },
+          "last seen " + new Date(f.last_seen).toLocaleString()),
+        el("span", { class: "spacer" }),
+        el("button", { class: "secondary" }, "Open spec"),
+        el("button", {}, "Encode as rule"),
+      ]),
+    ]);
+    const [openBtn, encodeBtn] = row.querySelectorAll("button");
+    openBtn.addEventListener("click", () => go(`/projects/${pid}/specs/${f.spec_id}`));
+    encodeBtn.addEventListener("click", () => {
+      // Drop the user back into the rules tab with a pre-populated body
+      // describing this failure class so they can save a new guide.
+      const tab = mount.parentElement.previousElementSibling // tabRow above body
+        ? mount.parentElement.previousElementSibling.querySelector('button:not(.secondary)')
+        : null;
+      const draftBody =
+        `Avoid the failure pattern surfaced by criterion "${f.criterion_text}" of kind ${f.kind}.\n\n` +
+        `Last seen failure: ${f.last_summary || "(no summary captured)"}\n\n` +
+        `Add this guide to keep the agent from re-tripping on this pattern.`;
+      sessionStorage.setItem("duckllo.draft-rule", JSON.stringify({
+        kind: "agents_md",
+        name: `Avoid: ${(f.criterion_text || "").slice(0, 60)}`,
+        body: draftBody,
+      }));
+      // Click the rules tab to switch view; renderRules picks up the draft.
+      if (tab) tab.click();
+    });
+    list.appendChild(row);
+  }
+  mount.appendChild(list);
 }
 
 async function renderRules(mount, pid) {
@@ -102,11 +168,23 @@ async function renderRules(mount, pid) {
     mount.appendChild(list);
   }
 
-  // Create form.
+  // Create form. If we landed here via the "Encode as rule" button on
+  // the recurring-failures tab, sessionStorage carries a draft that we
+  // pre-populate.
   mount.appendChild(el("h2", { style: "margin-top:24px" }, "New rule"));
+  const draftRaw = sessionStorage.getItem("duckllo.draft-rule");
+  let draft = null;
+  if (draftRaw) {
+    try { draft = JSON.parse(draftRaw); } catch (_) { /* ignore */ }
+    sessionStorage.removeItem("duckllo.draft-rule");
+  }
   const nameInput = el("input", { type: "text", placeholder: "e.g. House style — short PR titles" });
-  const kindInput = el("select", {}, RULE_KINDS.map((k) => el("option", { value: k }, k)));
+  const kindInput = el("select", {}, RULE_KINDS.map((k) => el("option", { value: k, ...(draft && draft.kind === k ? { selected: "" } : {}) }, k)));
   const bodyInput = el("textarea", { rows: "6", placeholder: "What the agent should do or avoid. This text is concatenated into the runner's per-iteration system prompt." });
+  if (draft) {
+    nameInput.value = draft.name || "";
+    bodyInput.value = draft.body || "";
+  }
   const create = el("button", {}, "Create rule");
   create.addEventListener("click", async () => {
     if (!nameInput.value.trim() || !bodyInput.value.trim()) {

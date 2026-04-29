@@ -100,6 +100,9 @@ func (s *Server) routes() http.Handler {
 			r.Patch("/harness-rules/{ruleID}", s.handlePatchRule)
 			r.Delete("/harness-rules/{ruleID}", s.handleDeleteRule)
 
+			// Steering signals.
+			r.Get("/steering/recurring-failures", s.handleRecurringFailures)
+
 			// Live event stream.
 			r.Get("/events", s.handleEvents)
 
