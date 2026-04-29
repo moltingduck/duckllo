@@ -37,6 +37,34 @@ async function refresh(mount, pid, rid) {
   mount.appendChild(el("p", { class: "muted mono" },
     `status=${run.status} · turns=${run.turns_used}/${run.turn_budget} · tokens=${run.token_usage}`));
 
+  // Phase 2 visibility: when the runner has provisioned a Docker
+  // workspace (and optionally a Tailscale sidecar), the dev URL,
+  // container id, and tailscale host all live in run.workspace_meta.
+  // Surface them so an operator can click straight through to the
+  // dev server instead of digging through the API.
+  const wm = run.workspace_meta || {};
+  const wmKeys = Object.keys(wm).filter(k => wm[k]);
+  if (wmKeys.length > 0) {
+    const card = el("div", { class: "card", style: "margin-top:6px" });
+    card.appendChild(el("h3", { style: "margin:0 0 6px;font-size:13px" }, "Workspace"));
+    const tbl = el("table", { class: "mono", style: "font-size:12px;width:100%" });
+    for (const k of wmKeys) {
+      const tr = el("tr");
+      tr.appendChild(el("td", { class: "muted", style: "padding:2px 8px 2px 0;width:140px" }, k));
+      const v = String(wm[k]);
+      let cell;
+      if (k === "dev_url" && /^https?:\/\//.test(v)) {
+        cell = el("td", {}, [el("a", { href: v, target: "_blank", rel: "noopener" }, v)]);
+      } else {
+        cell = el("td", {}, v);
+      }
+      tr.appendChild(cell);
+      tbl.appendChild(tr);
+    }
+    card.appendChild(tbl);
+    mount.appendChild(card);
+  }
+
   const actionRow = el("div", { class: "row", style: "gap:8px" });
   if (!["done", "failed", "aborted"].includes(run.status)) {
     const abort = el("button", { class: "danger" }, "Abort run");
