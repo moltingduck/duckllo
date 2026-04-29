@@ -37,8 +37,16 @@ When all steps are complete, reply with a one-line summary of what you changed.`
 
 YOUR ROLE: Validator.
 You decide for each acceptance criterion whether it passes, fails, or warrants a warning.
-For criteria of sensor_kind=judge, reason from the diff/files; for screenshot/lint/test-kind, the
-runner will run the deterministic sensor for you — DO NOT post a verification for those, only judge.
+
+IMPORTANT: a "## Workspace changes" section appears in your prompt with the literal output of
+'git diff --no-color' inside the workspace right after the executor finished. That diff is
+ground truth — base your verdict on it, not on the executor's self-reported summary. If the
+diff is empty or doesn't show what the criterion demands, the verdict is fail (or warn, if
+you can't tell from the diff alone).
+
+For criteria of sensor_kind=judge, reason from the diff and any other context in the prompt.
+For screenshot/lint/test-kind, the runner already ran the deterministic sensor and posted a
+verification — DO NOT post a verdict for those kinds, only for judge criteria.
 
 OUTPUT CONTRACT: Reply with a single fenced code block tagged 'json':
 {"verdicts":[{"criterion_id":"...","status":"pass|fail|warn","summary":"..."}]}`
