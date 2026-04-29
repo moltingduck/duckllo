@@ -89,6 +89,21 @@ func userPromptFor(role string, b *client.Bundle) string {
 		}
 	}
 
+	// Validator + corrector both benefit from seeing the actual workspace
+	// changes the executor produced. Without this section the judge has
+	// no filesystem context on API providers and can only trust the
+	// executor's self-reported summary — which the dogfood loop's first
+	// run proved is unreliable.
+	if role == "validator" || role == "corrector" {
+		if diff := latestWorkspaceDiff(b); diff != "" {
+			fmt.Fprintln(&sb, "## Workspace changes (from `git diff` after execute)")
+			fmt.Fprintln(&sb, "```diff")
+			fmt.Fprintln(&sb, diff)
+			fmt.Fprintln(&sb, "```")
+			fmt.Fprintln(&sb)
+		}
+	}
+
 	if role == "corrector" && len(b.OpenAnnotations) > 0 {
 		fmt.Fprintln(&sb, "## Annotations to address")
 		for _, a := range b.OpenAnnotations {
@@ -140,4 +155,27 @@ func intOf(v any) int {
 		return x
 	}
 	return 0
+}
+
+// latestWorkspaceDiff scans the bundle's verifications for the most
+// recent `workspace_changes` posting and returns its `details_json.diff`
+// content. Returns "" when no such verification exists, or when the diff
+// is empty (clean tree).
+func latestWorkspaceDiff(b *client.Bundle) string {
+	for i := len(b.Verifications) - 1; i >= 0; i-- {
+		v := b.Verifications[i]
+		if v.Kind != "workspace_changes" {
+			continue
+		}
+		if len(v.Details) == 0 {
+			return ""
+		}
+		var details struct {
+			Diff string `json:"diff"`
+		}
+		if err := json.Unmarshal(v.Details, &details); err == nil && details.Diff != "" {
+			return details.Diff
+		}
+	}
+	return ""
 }

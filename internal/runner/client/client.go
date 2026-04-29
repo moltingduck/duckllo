@@ -190,8 +190,15 @@ type Iteration struct {
 }
 
 type Verification struct {
-	ID   uuid.UUID `json:"id"`
-	Kind string    `json:"kind"`
+	ID          uuid.UUID       `json:"id"`
+	Kind        string          `json:"kind"`
+	Class       string          `json:"class,omitempty"`
+	Status      string          `json:"status,omitempty"`
+	Summary     string          `json:"summary,omitempty"`
+	ArtifactURL string          `json:"artifact_url,omitempty"`
+	Details     json.RawMessage `json:"details_json,omitempty"`
+	CriterionID string          `json:"criterion_id,omitempty"`
+	CreatedAt   time.Time       `json:"created_at,omitempty"`
 }
 
 type Annotation struct {
