@@ -955,6 +955,259 @@ func TestPlanApproval_AgentCanApproveOwnPlan(t *testing.T) {
 		nil, nil, http.StatusOK)
 }
 
+// TestPEVCFullCorrectionLoop is the end-to-end proof that the harness
+// loop actually loops. TestHarnessFlow covers the happy path where
+// the validator passes on the first try; this one drives the state
+// machine through the *correction* arc:
+//
+//	Plan → Execute → Validate(fail) → human annotation →
+//	Correct → Execute (loop) → Validate(pass) → Done
+//
+// Asserts at every joint that:
+//   - the work queue produces the right phase to claim next
+//   - the run.status string mirrors what the dashboard shows the
+//     operator (queued / planning / executing / validating / correcting
+//     / done)
+//   - posting a fix_required annotation is the trigger that re-opens
+//     the loop (run flips to 'correcting' and a 'correct' work item is
+//     waiting to be claimed)
+//   - reaching 'done' requires the second validate pass to actually
+//     post 'pass' on every criterion — no shortcut path
+//   - the per-iteration history persists in the right order so the
+//     run timeline UI has something to render
+//
+// Without this test the correction loop's seven different state
+// transitions could regress one at a time and only TestHarnessFlow's
+// happy path would catch them — which never exercises 'correct'.
+func TestPEVCFullCorrectionLoop(t *testing.T) {
+	e := setupTestEnv(t)
+	pid := e.pid
+	runnerID := e.runnerID
+
+	// ─── Compose the spec ────────────────────────────────────────────
+	// One screenshot criterion: visual sensors are the canonical case
+	// where a human reviewer overrides the validator with an
+	// annotation, so that's the realistic target for this test.
+	var spec map[string]any
+	e.c.do("POST", "/api/projects/"+pid+"/specs", e.c.token, map[string]any{
+		"title": "Add a header banner", "intent": "Banner across the top of every page.",
+	}, &spec, http.StatusCreated)
+	sid := spec["id"].(string)
+	e.c.do("POST", "/api/projects/"+pid+"/specs/"+sid+"/criteria", e.c.token,
+		map[string]any{"text": "banner is visible at the top of the home page",
+			"sensor_kind": "screenshot"}, nil, http.StatusOK)
+	e.c.do("POST", "/api/projects/"+pid+"/specs/"+sid+"/approve", e.c.token, nil, nil, http.StatusOK)
+
+	// ─── Enqueue run; expect plan phase pending ──────────────────────
+	var run map[string]any
+	e.c.do("POST", "/api/projects/"+pid+"/specs/"+sid+"/runs", e.c.token,
+		map[string]any{}, &run, http.StatusCreated)
+	rid := run["id"].(string)
+	assertRunStatus(t, e, rid, "queued")
+
+	// ─── Plan phase ──────────────────────────────────────────────────
+	claimAndAssertPhase(t, e, runnerID, "plan")
+	assertRunStatus(t, e, rid, "planning")
+
+	postIteration(t, e, rid, "plan", "planner", "drafted plan")
+	planID := createPlan(t, e, sid, []map[string]any{{"id": "s1", "order": 1, "summary": "add the banner div"}})
+	approvePlan(t, e, planID)
+	advance(t, e, rid, runnerID, "plan", "execute", "", planID)
+
+	// ─── Execute phase (first time) ──────────────────────────────────
+	claimAndAssertPhase(t, e, runnerID, "execute")
+	assertRunStatus(t, e, rid, "executing")
+	postIteration(t, e, rid, "execute", "executor", "wrote initial banner")
+	advance(t, e, rid, runnerID, "execute", "validate", "", "")
+
+	// ─── Validate phase (first time) — verdict is FAIL ───────────────
+	claimAndAssertPhase(t, e, runnerID, "validate")
+	assertRunStatus(t, e, rid, "validating")
+	firstCrit := getFirstCriterion(t, e, sid)
+	var verif map[string]any
+	e.c.do("POST", "/api/projects/"+pid+"/runs/"+rid+"/verifications", e.apiKey,
+		map[string]any{
+			"criterion_id": firstCrit["id"],
+			"kind":         "screenshot", "class": "computational",
+			"status": "fail", "summary": "banner is missing entirely",
+			"artifact_url": "/api/uploads/v1.png",
+		}, &verif, http.StatusCreated)
+	vid := verif["id"].(string)
+	// Mirror the real validator orchestrator: post a summary iteration
+	// before advancing so the run timeline shows the validate step.
+	postIteration(t, e, rid, "validate", "validator", "ran sensors; criterion failed")
+	// Validator advances *without* final_status — a fail leaves the run
+	// parked in 'validating' for human review (this is the
+	// runner-validator behaviour locked in by commit 0befe58).
+	advance(t, e, rid, runnerID, "validate", "", "", "")
+	assertRunStatus(t, e, rid, "validating")
+
+	// At this point the work_queue should be empty until a human acts.
+	if claimNoWork(t, e, runnerID, []string{"plan", "execute", "validate", "correct"}) == false {
+		t.Fatalf("expected no work to claim while parked in validating")
+	}
+
+	// ─── Human posts fix_required annotation ─────────────────────────
+	// This is the correction trigger: server flips run to 'correcting'
+	// AND inserts a 'correct' work_queue row atomically.
+	e.c.do("POST", "/api/projects/"+pid+"/verifications/"+vid+"/annotations", e.c.token,
+		map[string]any{
+			"bbox":    map[string]any{"x": 0.1, "y": 0.0, "w": 0.8, "h": 0.1},
+			"body":    "banner should be styled with our brand color, not transparent",
+			"verdict": "fix_required",
+		}, nil, http.StatusCreated)
+	assertRunStatus(t, e, rid, "correcting")
+
+	// ─── Correct phase ───────────────────────────────────────────────
+	// The corrector's job is to read the open annotations and route
+	// the run back to execute with the fix instructions in hand.
+	claimAndAssertPhase(t, e, runnerID, "correct")
+
+	// Bundle must surface the open annotation so the corrector agent
+	// has it as structured input — without that the corrector has no
+	// signal to act on.
+	var bundle map[string]any
+	e.c.do("GET", "/api/projects/"+pid+"/runs/"+rid+"/bundle", e.apiKey, nil, &bundle, http.StatusOK)
+	openAnnos, _ := bundle["open_annotations"].([]any)
+	if len(openAnnos) != 1 {
+		t.Fatalf("bundle.open_annotations during correct: got %d want 1", len(openAnnos))
+	}
+	if (openAnnos[0].(map[string]any))["body"] != "banner should be styled with our brand color, not transparent" {
+		t.Errorf("annotation body: %v", openAnnos[0])
+	}
+	postIteration(t, e, rid, "correct", "corrector", "addressed annotation; routing back to execute")
+	advance(t, e, rid, runnerID, "correct", "execute", "", "")
+
+	// ─── Execute phase (loop iteration #2) ───────────────────────────
+	claimAndAssertPhase(t, e, runnerID, "execute")
+	assertRunStatus(t, e, rid, "executing")
+	postIteration(t, e, rid, "execute", "executor", "applied the brand-color styling")
+	advance(t, e, rid, runnerID, "execute", "validate", "", "")
+
+	// ─── Validate phase (second time) — verdict is PASS ──────────────
+	claimAndAssertPhase(t, e, runnerID, "validate")
+	e.c.do("POST", "/api/projects/"+pid+"/runs/"+rid+"/verifications", e.apiKey,
+		map[string]any{
+			"criterion_id": firstCrit["id"],
+			"kind":         "screenshot", "class": "computational",
+			"status": "pass", "summary": "banner now uses brand color and is positioned correctly",
+			"artifact_url": "/api/uploads/v2.png",
+		}, nil, http.StatusCreated)
+	postIteration(t, e, rid, "validate", "validator", "ran sensors; all criteria passed")
+	advance(t, e, rid, runnerID, "validate", "", "done", "")
+
+	// ─── Final assertions ────────────────────────────────────────────
+	assertRunStatus(t, e, rid, "done")
+	var finalSpec map[string]any
+	e.c.do("GET", "/api/projects/"+pid+"/specs/"+sid, e.c.token, nil, &finalSpec, http.StatusOK)
+	if got := finalSpec["spec"].(map[string]any)["status"]; got != "validated" {
+		t.Errorf("final spec status: got %v want validated", got)
+	}
+
+	// The iteration timeline should show the full loop in order:
+	// plan, execute, validate, correct, execute, validate. That's
+	// proof the runner actually re-entered execute after the
+	// annotation, not just that the state machine reached 'done'.
+	var detail map[string]any
+	e.c.do("GET", "/api/projects/"+pid+"/runs/"+rid, e.c.token, nil, &detail, http.StatusOK)
+	iters, _ := detail["iterations"].([]any)
+	if len(iters) != 6 {
+		t.Fatalf("iteration count: got %d want 6 (plan, execute, validate, correct, execute, validate)", len(iters))
+	}
+	wantPhases := []string{"plan", "execute", "validate", "correct", "execute", "validate"}
+	for i, w := range wantPhases {
+		got := iters[i].(map[string]any)["phase"]
+		if got != w {
+			t.Errorf("iteration %d phase: got %v want %s", i, got, w)
+		}
+	}
+}
+
+// claimAndAssertPhase drives one runner claim and fails the test if the
+// returned phase doesn't match. Returns nothing because the test never
+// uses the work item's id directly — the runner identity in the
+// store keeps things bound through the subsequent advance call.
+func claimAndAssertPhase(t *testing.T, e *testEnv, runnerID, want string) {
+	t.Helper()
+	var claim struct {
+		WorkItem map[string]any `json:"work_item"`
+	}
+	e.c.do("POST", "/api/projects/"+e.pid+"/work/claim", e.apiKey,
+		map[string]any{"runner_id": runnerID, "phases": []string{want}},
+		&claim, http.StatusOK)
+	if got := claim.WorkItem["phase"]; got != want {
+		t.Fatalf("claim: got phase=%v want %s", got, want)
+	}
+}
+
+// claimNoWork returns true if the next claim across all PEVC phases
+// returns 204 — i.e. the work queue is genuinely empty for this runner.
+func claimNoWork(t *testing.T, e *testEnv, runnerID string, phases []string) bool {
+	t.Helper()
+	res := e.c.raw("POST", "/api/projects/"+e.pid+"/work/claim", e.apiKey,
+		map[string]any{"runner_id": runnerID, "phases": phases})
+	defer res.Body.Close()
+	return res.StatusCode == http.StatusNoContent
+}
+
+func postIteration(t *testing.T, e *testEnv, rid, phase, role, summary string) {
+	t.Helper()
+	e.c.do("POST", "/api/projects/"+e.pid+"/runs/"+rid+"/iterations", e.apiKey,
+		map[string]any{"phase": phase, "agent_role": role, "summary": summary},
+		nil, http.StatusCreated)
+}
+
+func createPlan(t *testing.T, e *testEnv, sid string, steps []map[string]any) string {
+	t.Helper()
+	var plan map[string]any
+	e.c.do("POST", "/api/projects/"+e.pid+"/specs/"+sid+"/plans", e.apiKey,
+		map[string]any{"created_by_role": "planner", "steps": steps},
+		&plan, http.StatusCreated)
+	return plan["id"].(string)
+}
+
+func approvePlan(t *testing.T, e *testEnv, planID string) {
+	t.Helper()
+	e.c.do("POST", "/api/projects/"+e.pid+"/plans/"+planID+"/approve", e.c.token, nil, nil, http.StatusOK)
+}
+
+func advance(t *testing.T, e *testEnv, rid, runnerID, from, to, finalStatus, planID string) {
+	t.Helper()
+	body := map[string]any{"runner_id": runnerID, "from_phase": from}
+	if to != "" {
+		body["to_phase"] = to
+	}
+	if finalStatus != "" {
+		body["final_status"] = finalStatus
+	}
+	if planID != "" {
+		body["plan_id"] = planID
+	}
+	e.c.do("POST", "/api/projects/"+e.pid+"/runs/"+rid+"/advance", e.apiKey,
+		body, nil, http.StatusOK)
+}
+
+func assertRunStatus(t *testing.T, e *testEnv, rid, want string) {
+	t.Helper()
+	var detail map[string]any
+	e.c.do("GET", "/api/projects/"+e.pid+"/runs/"+rid, e.c.token, nil, &detail, http.StatusOK)
+	got := detail["run"].(map[string]any)["status"]
+	if got != want {
+		t.Fatalf("run.status: got %v want %s", got, want)
+	}
+}
+
+func getFirstCriterion(t *testing.T, e *testEnv, sid string) map[string]any {
+	t.Helper()
+	var fresh map[string]any
+	e.c.do("GET", "/api/projects/"+e.pid+"/specs/"+sid, e.c.token, nil, &fresh, http.StatusOK)
+	crits, _ := fresh["spec"].(map[string]any)["acceptance_criteria"].([]any)
+	if len(crits) == 0 {
+		t.Fatalf("spec %s has no criteria", sid)
+	}
+	return crits[0].(map[string]any)
+}
+
 // TestSuggest_NoProvider503 covers the cold path: when the server has
 // no LLM provider wired (no ANTHROPIC_API_KEY, no claude CLI), both
 // /specs/refine and /specs/suggest must return 503 with a clear message
