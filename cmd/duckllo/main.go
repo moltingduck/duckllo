@@ -17,10 +17,17 @@ import (
 	"github.com/moltingduck/duckllo/internal/bootstrap"
 	"github.com/moltingduck/duckllo/internal/config"
 	"github.com/moltingduck/duckllo/internal/db"
+	"github.com/moltingduck/duckllo/internal/dotenv"
 	httpapi "github.com/moltingduck/duckllo/internal/http"
 )
 
 func main() {
+	if path, err := dotenv.LoadDefault(); err != nil {
+		fmt.Fprintln(os.Stderr, "warning: dotenv load:", err)
+	} else if path != "" {
+		fmt.Fprintln(os.Stderr, "loaded env from", path)
+	}
+
 	if len(os.Args) < 2 {
 		usage()
 		os.Exit(2)

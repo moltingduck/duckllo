@@ -23,6 +23,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/moltingduck/duckllo/internal/dotenv"
 	"github.com/moltingduck/duckllo/internal/runner/agent"
 	"github.com/moltingduck/duckllo/internal/runner/client"
 	"github.com/moltingduck/duckllo/internal/runner/orchestrator"
@@ -31,6 +32,12 @@ import (
 )
 
 func main() {
+	if path, err := dotenv.LoadDefault(); err != nil {
+		log.Printf("warning: dotenv load: %v", err)
+	} else if path != "" {
+		log.Printf("loaded env from %s", path)
+	}
+
 	var (
 		baseURL     = flag.String("url", env("DUCKLLO_URL", "http://localhost:3000"), "duckllo base URL")
 		apiKey      = flag.String("key", env("DUCKLLO_KEY", ""), "duckllo project API key (duckllo_...)")

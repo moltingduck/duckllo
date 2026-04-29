@@ -23,18 +23,23 @@ Phase 1 ships the schema, Web UI, runner, sensors, and visual annotator. Phase 2
 git clone https://github.com/moltingduck/duckllo.git
 cd duckllo
 
-# Bring up Postgres
-docker compose up db -d
+# 1. One-time env setup
+make setup                  # copies .duckllo.env.example -> .duckllo.env
+$EDITOR .duckllo.env        # at minimum: DUCKLLO_GIN_PASSWORD
 
-# Run the server (auto-applies migrations)
-DUCKLLO_GIN_PASSWORD=changeme go run ./cmd/duckllo serve
+# 2. Bring up Postgres
+make db                     # docker compose up db -d
 
-# In a second terminal: start the runner (needs an Anthropic API key)
-ANTHROPIC_API_KEY=sk-... \
-DUCKLLO_KEY=duckllo_... \
-DUCKLLO_PROJECT=<project-uuid> \
-go run ./cmd/runner
+# 3. Run the server (auto-applies migrations, auto-loads .duckllo.env)
+make serve                  # → http://localhost:3000
+
+# 4. Open the UI, register, create a project, mint an API key under
+#    Project → Settings, paste the key + project UUID + your
+#    ANTHROPIC_API_KEY into .duckllo.env, then:
+make runner                 # in a second shell
 ```
+
+Both binaries auto-load `.duckllo.env` (then `.env`) from the cwd. Existing process env vars override the file, so CI/Docker runs work unchanged.
 
 Open <http://localhost:3000>. First load → register a user (becomes admin). Create a project. Compose a spec, add criteria, approve. Click **Start run** — the planner drafts a plan, the executor runs it, sensors fire. Click any screenshot tile to draw a correction box.
 
