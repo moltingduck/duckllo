@@ -1,8 +1,32 @@
 # duckllo
 
-A **harness-engineering platform** for AI coding agents. Define a **Spec** with typed acceptance criteria; the runner agent walks a **Plan → Execute → Validate → Correct** loop; humans **review screenshots and draw boxes** to feed structured corrections back to the agent.
+A **harness-engineering platform** for AI coding agents. Define a **Spec** with typed acceptance criteria; a per-host client drives a local agent through a **Plan → Execute → Validate → Correct** loop; humans **review screenshots and draw boxes** in the central server to feed structured corrections back to the agent.
 
 Built around the harness-engineering ideas Anthropic, OpenAI and Thoughtworks have been writing about — guides (feedforward) + sensors (feedback) + a steering loop where humans iterate the harness rather than micro-review every diff.
+
+## Architecture
+
+```
+[ user / PM ] ──HTTP/SSE──► [ duckllo SERVER ]  ◄─── single coordination plane
+                                ▲   ▲   ▲
+                ┌───────────────┘   │   └────────────────┐
+                │                   │                    │
+        [ duckllo CLIENT ]   [ duckllo CLIENT ]   [ duckllo CLIENT ]
+        (mac mini)           (linux box)          (laptop)
+            │                   │                    │
+            ▼                   ▼                    ▼
+        [ Anthropic API ]   [ Ollama (local) ]  [ Claude Code CLI ]
+```
+
+- **Server** (one) — Web UI, REST + SSE, Postgres, harness rules.
+  Users view all state and issue commands here.
+- **Client** (many) — runs on each host alongside an agent. Claims
+  work, drives one PEVC phase at a time, posts state back continuously.
+  Multiple clients on the same project is the supported topology.
+- **Agent** (one per client) — Anthropic, OpenAI, Ollama, or **Claude
+  Code CLI as a subprocess**. Picked at startup with `--provider`;
+  swappable. The Claude Code driver lets a developer's local Claude
+  Code session be driven by duckllo specs.
 
 ## Why duckllo
 

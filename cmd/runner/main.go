@@ -55,9 +55,11 @@ func main() {
 		image          = flag.String("container-image", env("DUCKLLO_CONTAINER_IMAGE", ""), "Docker image for per-run workspaces (empty = run on host)")
 		tailscaleKey   = flag.String("tailscale-preauth-key", env("TAILSCALE_PREAUTH_KEY", ""), "Tailscale preauth key for the per-run sidecar (empty = no sidecar)")
 		tailscaleImage = flag.String("tailscale-image", env("DUCKLLO_TAILSCALE_IMAGE", "tailscale/tailscale:latest"), "Tailscale sidecar image")
-		providerName   = flag.String("provider", env("DUCKLLO_PROVIDER", "anthropic"), "model provider: anthropic|openai|ollama")
+		providerName   = flag.String("provider", env("DUCKLLO_PROVIDER", "anthropic"), "model provider: anthropic|openai|ollama|claude-code")
 		openaiKey      = flag.String("openai-key", env("OPENAI_API_KEY", ""), "OpenAI API key (when --provider=openai)")
 		ollamaURL      = flag.String("ollama-url", env("DUCKLLO_OLLAMA_URL", "http://localhost:11434"), "Ollama base URL (when --provider=ollama)")
+		claudeBinary   = flag.String("claude-binary", env("DUCKLLO_CLAUDE_BINARY", ""), "path to the claude CLI (when --provider=claude-code; empty = $PATH)")
+		claudeCwd      = flag.String("claude-cwd", env("DUCKLLO_CLAUDE_CWD", ""), "working directory the claude CLI runs in (defaults to --workspace)")
 	)
 	flag.Parse()
 
@@ -79,8 +81,10 @@ func main() {
 		}
 	case "ollama":
 		// Ollama runs locally — no key required.
+	case "claude-code", "claude":
+		// Claude Code drives a local CLI; no key required (the CLI manages its own auth).
 	default:
-		log.Fatalf("unknown provider %q (want anthropic|openai|ollama)", *providerName)
+		log.Fatalf("unknown provider %q (want anthropic|openai|ollama|claude-code)", *providerName)
 	}
 	if err := tools.EnsureRoot(*workspaceDir); err != nil {
 		log.Fatalf("workspace: %v", err)
@@ -92,12 +96,18 @@ func main() {
 	defer stop()
 
 	c := client.New(*baseURL, *apiKey, pid)
+	cwd := *claudeCwd
+	if cwd == "" {
+		cwd = *workspaceDir
+	}
 	prov, err := agent.New(agent.Config{
-		Provider:     *providerName,
-		AnthropicKey: *anthropic,
-		OpenAIKey:    *openaiKey,
-		OllamaURL:    *ollamaURL,
-		Model:        *model,
+		Provider:         *providerName,
+		AnthropicKey:     *anthropic,
+		OpenAIKey:        *openaiKey,
+		OllamaURL:        *ollamaURL,
+		Model:            *model,
+		ClaudeBinary:     *claudeBinary,
+		ClaudeWorkingDir: cwd,
 	})
 	if err != nil {
 		log.Fatalf("provider: %v", err)

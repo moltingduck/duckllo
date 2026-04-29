@@ -2,6 +2,44 @@
 
 This file is the source of truth for how any agent (Claude or otherwise) works on this project. Read it before making changes.
 
+## Architecture: server (1) ↔ many clients ↔ local agent
+
+```
+[ user / PM ] ──HTTP/SSE──► [ duckllo SERVER ]  ◄─── single coordination plane
+                                ▲   ▲   ▲
+                                │   │   │  (auth: per-project API key)
+                ┌───────────────┘   │   └────────────────┐
+                │                   │                    │
+        [ duckllo CLIENT ]   [ duckllo CLIENT ]   [ duckllo CLIENT ]
+        (host A)             (host B)             (Mac dev box)
+            │                   │                    │
+            ▼                   ▼                    ▼
+        [ Anthropic API ]   [ local Ollama ]    [ Claude Code CLI ]
+                                                  (subprocess)
+```
+
+- **Server** is the central authority. The Web UI, the SSE event bus,
+  all state, and every API live here. Users only interact with the
+  server. One project / many specs / many runs.
+- **Client** (today the binary is `cmd/runner`) runs on the host where
+  the agent lives. It claims work from the server via API key, drives a
+  local agent through one PEVC phase at a time, posts iterations and
+  verifications back. **Multiple clients per server is the supported
+  topology** — `FOR UPDATE SKIP LOCKED` on the work queue makes
+  concurrent claims safe.
+- **Agent** is whatever the client drives this iteration: Anthropic API,
+  OpenAI API, local Ollama, or **Claude Code CLI on the same host**.
+  All four are interchangeable behind `agent.Provider`. The Claude Code
+  driver shells out to the `claude` CLI, so a developer running Claude
+  Code on their dev machine can have it driven by duckllo specs without
+  any extra integration. Pick via `--provider {anthropic|openai|ollama|claude-code}`.
+
+The client and agent share a host because the executor's tools
+(`read_file`/`write_file`/`exec`) operate on the local workspace. The
+**workspace** is a host directory in Phase 1, a per-run Docker pod in
+Phase 2 (with optional Tailscale sidecar so the dev server is reachable
+from the tailnet for screenshot sensors).
+
 ## Owner Requirements (non-negotiable)
 
 - The owner / system steward is `gin`. Never remove or demote this account.
