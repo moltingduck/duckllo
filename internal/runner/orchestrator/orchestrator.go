@@ -93,9 +93,15 @@ func (o *Orchestrator) Run(ctx context.Context, work *client.WorkItem, run *clie
 	}
 
 	// Tear down the container only when the run is finishing — otherwise
-	// the next phase claim re-uses it.
+	// the next phase claim re-uses it. A non-nil err here means the
+	// runner loop in cmd/runner will mark the run failed *after* this
+	// function returns (its Advance call happens later). To avoid
+	// leaking containers on every failure we treat any returned error as
+	// "this run is going terminal" and tear down too. Recoverable errors
+	// (transient network, DB blips) cost a fresh container next claim,
+	// which is the cheaper outcome compared to leaking N containers.
 	if teardown != nil {
-		needTeardown := o.runShouldTearDown(ctx, work.RunID)
+		needTeardown := err != nil || o.runShouldTearDown(ctx, work.RunID)
 		if needTeardown {
 			_ = teardown(ctx)
 		}
