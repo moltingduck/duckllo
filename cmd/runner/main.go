@@ -55,6 +55,9 @@ func main() {
 		image          = flag.String("container-image", env("DUCKLLO_CONTAINER_IMAGE", ""), "Docker image for per-run workspaces (empty = run on host)")
 		tailscaleKey   = flag.String("tailscale-preauth-key", env("TAILSCALE_PREAUTH_KEY", ""), "Tailscale preauth key for the per-run sidecar (empty = no sidecar)")
 		tailscaleImage = flag.String("tailscale-image", env("DUCKLLO_TAILSCALE_IMAGE", "tailscale/tailscale:latest"), "Tailscale sidecar image")
+		providerName   = flag.String("provider", env("DUCKLLO_PROVIDER", "anthropic"), "model provider: anthropic|openai|ollama")
+		openaiKey      = flag.String("openai-key", env("OPENAI_API_KEY", ""), "OpenAI API key (when --provider=openai)")
+		ollamaURL      = flag.String("ollama-url", env("DUCKLLO_OLLAMA_URL", "http://localhost:11434"), "Ollama base URL (when --provider=ollama)")
 	)
 	flag.Parse()
 
@@ -65,8 +68,19 @@ func main() {
 	if err != nil {
 		log.Fatalf("invalid project id: %v", err)
 	}
-	if *anthropic == "" {
-		log.Fatal("ANTHROPIC_API_KEY required (or --anthropic-key)")
+	switch *providerName {
+	case "", "anthropic":
+		if *anthropic == "" {
+			log.Fatal("ANTHROPIC_API_KEY required (or --anthropic-key) for provider=anthropic")
+		}
+	case "openai":
+		if *openaiKey == "" {
+			log.Fatal("OPENAI_API_KEY required (or --openai-key) for provider=openai")
+		}
+	case "ollama":
+		// Ollama runs locally — no key required.
+	default:
+		log.Fatalf("unknown provider %q (want anthropic|openai|ollama)", *providerName)
 	}
 	if err := tools.EnsureRoot(*workspaceDir); err != nil {
 		log.Fatalf("workspace: %v", err)
@@ -78,7 +92,16 @@ func main() {
 	defer stop()
 
 	c := client.New(*baseURL, *apiKey, pid)
-	prov := agent.NewAnthropic(*anthropic, *model)
+	prov, err := agent.New(agent.Config{
+		Provider:     *providerName,
+		AnthropicKey: *anthropic,
+		OpenAIKey:    *openaiKey,
+		OllamaURL:    *ollamaURL,
+		Model:        *model,
+	})
+	if err != nil {
+		log.Fatalf("provider: %v", err)
+	}
 
 	o := &orchestrator.Orchestrator{
 		Client: c, Provider: prov,
@@ -100,8 +123,8 @@ func main() {
 			mode += " +tailscale"
 		}
 	}
-	log.Printf("runner %s up — url=%s project=%s roles=%v workspace=%s mode=%s model=%s",
-		*runnerID, *baseURL, *projectID, roles, *workspaceDir, mode, prov.DefaultModel())
+	log.Printf("runner %s up — url=%s project=%s roles=%v workspace=%s mode=%s provider=%s model=%s",
+		*runnerID, *baseURL, *projectID, roles, *workspaceDir, mode, prov.Name(), prov.DefaultModel())
 	_ = workspace.Meta{} // keep workspace import while orchestrator wires through
 
 	for {
