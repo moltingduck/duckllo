@@ -121,13 +121,31 @@ func userPromptFor(role string, b *client.Bundle) string {
 	}
 
 	if role == "corrector" && len(b.Verifications) > 0 {
-		fmt.Fprintln(&sb, "## Failed sensors")
+		// Filter to verifications the corrector actually needs to act on:
+		// fail / warn signals from any kind, plus the workspace_changes
+		// already covered by the diff section so we skip those here. Each
+		// row shows summary so the corrector knows *what* failed, not
+		// just *that* something failed.
+		var failures []client.Verification
 		for _, v := range b.Verifications {
-			if v.Kind != "" {
-				fmt.Fprintf(&sb, "- (%s) %s\n", v.Kind, v.ID)
+			if v.Kind == "" || v.Kind == "workspace_changes" {
+				continue
+			}
+			if v.Status == "fail" || v.Status == "warn" {
+				failures = append(failures, v)
 			}
 		}
-		fmt.Fprintln(&sb)
+		if len(failures) > 0 {
+			fmt.Fprintln(&sb, "## Failed / warning sensors")
+			for _, v := range failures {
+				summary := v.Summary
+				if summary == "" {
+					summary = "(no summary)"
+				}
+				fmt.Fprintf(&sb, "- [%s] (%s) %s\n", v.Status, v.Kind, summary)
+			}
+			fmt.Fprintln(&sb)
+		}
 	}
 
 	return sb.String()
