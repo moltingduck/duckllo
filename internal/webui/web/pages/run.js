@@ -101,6 +101,21 @@ async function refresh(mount, pid, rid) {
         const ctx = spec ? { specID: spec.id, criterion: critByID[v.criterion_id] } : {};
         tile.addEventListener("click", () => openAnnotator(pid, v, ctx));
       }
+
+      // workspace_changes carries a git diff in details_json.diff that
+      // makes the validator's verdict explicable. Show it inline in a
+      // collapsible block so humans see what actually changed without
+      // hitting the API directly.
+      if (v.kind === "workspace_changes" && v.details_json && v.details_json.diff) {
+        const det = el("details", { style: "margin-top:8px" });
+        det.appendChild(el("summary", { style: "cursor:pointer;color:var(--accent);font-size:12px" },
+          "View diff"));
+        const pre = el("pre", { class: "mono", style: "white-space:pre-wrap;font-size:11px;max-height:320px;overflow:auto;background:var(--bg-elev);padding:8px;border-radius:4px;margin-top:6px" });
+        pre.textContent = v.details_json.diff;
+        det.appendChild(pre);
+        tile.appendChild(det);
+      }
+
       sg.appendChild(tile);
     }
     rightCol.appendChild(sg);
