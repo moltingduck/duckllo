@@ -38,6 +38,8 @@ func (s *Server) routes() http.Handler {
 
 		r.Get("/api/projects", s.handleListProjects)
 		r.Post("/api/projects", s.handleCreateProject)
+		r.Get("/api/projects/bar", s.handleProjectBar)
+		r.Post("/api/projects/reorder", s.handleReorderProjects)
 
 		r.Route("/api/projects/{projectID}", func(r chi.Router) {
 			r.Use(s.requireProjectAccess)
@@ -45,6 +47,9 @@ func (s *Server) routes() http.Handler {
 			r.Get("/", s.handleGetProject)
 			r.Patch("/", s.handlePatchProject)
 			r.Delete("/", s.handleDeleteProject)
+
+			r.Get("/summary", s.handleProjectSummary)
+			r.Patch("/prefs", s.handlePatchProjectPrefs)
 
 			r.Get("/members", s.handleListMembers)
 			r.Post("/members", s.handleAddMember)

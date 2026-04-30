@@ -64,6 +64,112 @@ button.secondary, .btn.secondary {
 button.danger, .btn.danger { background: var(--fail); border-color: var(--fail); }
 button:disabled { opacity: 0.5; cursor: not-allowed; }
 
+/* Project bar: persistent horizontal row of project tiles above the
+   page content. Tile = name + status badges + hover detail card. Drag
+   to reorder, ★ to pin, ✕ to archive. Overflow "..." menu when there
+   are more than VISIBLE_LIMIT tiles (or any archived). */
+#project-bar {
+  background: var(--bg-card); border-bottom: 1px solid var(--border);
+  padding: 8px 16px;
+}
+.project-bar__row {
+  display: flex; gap: 8px; align-items: stretch; flex-wrap: nowrap; overflow-x: auto;
+}
+.project-bar__tile {
+  position: relative; padding: 6px 10px; min-width: 160px;
+  background: rgba(255,255,255,0.02); border: 1px solid var(--border); border-radius: 6px;
+  cursor: grab; user-select: none;
+}
+.project-bar__tile.pinned { border-color: var(--accent-dim); }
+.project-bar__tile.archived { opacity: 0.5; }
+.project-bar__tile.dragging { opacity: 0.4; }
+.project-bar__tile.drop-target { outline: 2px dashed var(--accent-dim); outline-offset: -2px; }
+
+.project-bar__head {
+  display: flex; align-items: center; gap: 4px; margin-bottom: 4px;
+}
+.project-bar__name {
+  flex: 1; font-weight: 500; color: var(--fg); text-decoration: none;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.project-bar__name:hover { color: var(--accent); }
+.project-bar__icon {
+  background: transparent; border: none; padding: 0 4px; color: var(--fg-dim);
+  font-size: 12px; cursor: pointer;
+}
+.project-bar__icon:hover { color: var(--fg); }
+
+.project-bar__badges {
+  display: flex; gap: 4px; flex-wrap: wrap; align-items: center;
+}
+.project-bar__badge {
+  display: inline-flex; align-items: center; gap: 3px; font-size: 11px;
+  padding: 1px 6px; border-radius: 8px;
+  background: rgba(255,255,255,0.04); border: 1px solid var(--border); color: var(--fg-dim);
+}
+.project-bar__badge-icon { font-size: 10px; }
+.project-bar__badge-empty { font-size: 11px; }
+
+/* Hover detail card: full per-status breakdown. Floats below the tile,
+   does not block drag (dragstart on the tile fires before our hover
+   delay). z-index keeps it above the next row's tiles when scrolling. */
+.project-bar__hover-card {
+  position: absolute; top: calc(100% + 4px); left: 0; z-index: 20;
+  min-width: 240px; padding: 10px 12px;
+  background: var(--bg-card); border: 1px solid var(--border); border-radius: 6px;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+  font-size: 12px; cursor: default;
+}
+.project-bar__hover-title { font-weight: 600; margin-bottom: 2px; }
+.project-bar__hover-desc { font-size: 11px; margin-bottom: 8px; }
+.project-bar__hover-card ul { list-style: none; padding: 0; margin: 0 0 8px; }
+.project-bar__hover-card li {
+  display: flex; justify-content: space-between; padding: 2px 0;
+}
+.project-bar__hover-label { color: var(--fg-dim); }
+.project-bar__hover-count { font-family: var(--mono); }
+.project-bar__hover-runs > div { display: flex; justify-content: space-between; padding: 2px 0; font-size: 12px; }
+.project-bar__hover-runs strong.warn { color: var(--warn); }
+
+.project-bar__overflow { position: relative; }
+.project-bar__overflow-btn {
+  background: transparent; border: 1px solid var(--border); color: var(--fg-dim);
+  padding: 6px 12px; border-radius: 6px; cursor: pointer;
+}
+.project-bar__overflow-btn:hover { color: var(--fg); border-color: var(--accent-dim); }
+.project-bar__overflow-menu {
+  position: absolute; top: calc(100% + 4px); left: 0; z-index: 30;
+  display: none; min-width: 220px; padding: 6px 0;
+  background: var(--bg-card); border: 1px solid var(--border); border-radius: 6px;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+}
+.project-bar__overflow-menu.open { display: block; }
+.project-bar__overflow-row {
+  display: flex; justify-content: space-between; padding: 6px 12px; font-size: 13px;
+}
+.project-bar__overflow-row a { color: var(--fg); text-decoration: none; flex: 1; }
+.project-bar__overflow-row a:hover { color: var(--accent); }
+.project-bar__overflow-row.archived a { color: var(--fg-dim); font-style: italic; }
+
+.project-bar__new {
+  align-self: center; white-space: nowrap; margin-left: auto;
+}
+.project-bar__error { color: var(--fail); font-size: 12px; padding: 4px 0; }
+
+/* Help tooltip styling: any element with `help-tip` and a [title]
+   attribute renders the question-mark superscript and the system
+   tooltip. Used on phase nav items and form-field labels to explain
+   what each thing does (e.g. "Steering", "Intent", "sensor_kind"). */
+.help-tip::after {
+  content: "?";
+  display: inline-block; margin-left: 4px;
+  width: 13px; height: 13px; line-height: 13px; text-align: center;
+  font-size: 10px; font-weight: bold;
+  border-radius: 50%; border: 1px solid var(--fg-dim); color: var(--fg-dim);
+  cursor: help; vertical-align: middle;
+}
+.help-tip:hover::after { color: var(--fg); border-color: var(--fg); }
+
 /* Suggest-panel answer chips: clickable pills the user picks from
    instead of typing. Active state mirrors the chosen option back into
    the textarea so a follow-up click can swap selection. */

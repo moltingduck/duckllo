@@ -10,6 +10,7 @@ import * as specNew  from "/pages/spec-new.js";
 import * as spec     from "/pages/spec.js";
 import * as run      from "/pages/run.js";
 import * as steering from "/pages/steering.js";
+import * as projectBar from "/components/project-bar.js";
 
 on("/",                              gateRequiringAuth(projects.render));
 on("/login",                         login.render);
@@ -63,6 +64,7 @@ async function paintTopbar() {
   }
 }
 
-window.addEventListener("hashchange", paintTopbar);
+window.addEventListener("hashchange", () => { paintTopbar(); projectBar.refresh(); });
 paintTopbar();
+projectBar.refresh();
 start(document.getElementById("app"));

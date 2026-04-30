@@ -223,10 +223,23 @@ export async function render(mount, params) {
   cancel.addEventListener("click", () => go(`/projects/${params.pid}/specs`));
 
   const card = el("div", { class: "card", style: "max-width:720px" }, [
-    el("label", {}, "Title"), titleInput,
-    el("label", {}, "Intent"), intentInput,
-    el("label", {}, "Priority"), priorityInput,
-    el("h2", { style: "margin-top:18px" }, "Acceptance criteria"),
+    el("label", {
+      class: "help-tip",
+      title: "Short imperative-voice summary of the change (≤ 70 chars). Becomes the spec's headline in the project list. Frozen once the spec is approved.",
+    }, "Title"), titleInput,
+    el("label", {
+      class: "help-tip",
+      title: "Why this matters and what success looks like. 2-4 sentences is plenty — focus on the user-visible goal, the constraint, and the win condition. The runner reads this on every iteration; the LLM judge uses it to decide if the diff matches intent. Frozen on approval.",
+    }, "Intent"), intentInput,
+    el("label", {
+      class: "help-tip",
+      title: "Sort order on the project's spec list. Doesn't change runner behaviour — purely organisational.",
+    }, "Priority"), priorityInput,
+    el("h2", {
+      class: "help-tip",
+      style: "margin-top:18px",
+      title: "Each criterion is a typed sensor target — when the runner enters the validate phase, it fires one sensor per criterion (lint runs golangci-lint, screenshot drives chromedp, judge calls the LLM judge…). A run only reaches 'done' when every non-manual criterion has a passing verification.",
+    }, "Acceptance criteria"),
     el("div", { class: "row", style: "gap:8px;margin-bottom:6px" }, [suggestBtn]),
     refinePanel,
     criteriaList,

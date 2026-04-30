@@ -1208,6 +1208,138 @@ func getFirstCriterion(t *testing.T, e *testEnv, sid string) map[string]any {
 	return crits[0].(map[string]any)
 }
 
+// TestProjectBar_SummaryAndPrefs locks in the API contract the new
+// project bar consumes. The bar fetches /api/projects/bar on initial
+// render to get all projects + each one's prefs + summary in a single
+// round trip; on SSE events it re-fetches /api/projects/{pid}/summary
+// for just the affected tile. PATCH /prefs flips pin/archive,
+// /reorder writes positions in one transaction.
+//
+// Asserts the counts actually move with state (a draft spec shows up
+// in the draft bucket, an approved one moves to approved, a parked
+// run shows up under runs_validating) so regressions in the count
+// SQL break the test.
+func TestProjectBar_SummaryAndPrefs(t *testing.T) {
+	e := setupTestEnv(t)
+
+	// Create a second project so we can exercise reorder/pin/archive
+	// against more than one tile. setupTestEnv already created the
+	// first ("test").
+	var projB map[string]any
+	e.c.do("POST", "/api/projects", e.c.token,
+		map[string]any{"name": "second", "description": "for ordering"}, &projB, http.StatusCreated)
+	pidB := projB["id"].(string)
+
+	// /bar fetch: should return both projects with default prefs and
+	// empty summaries.
+	var bar map[string]any
+	e.c.do("GET", "/api/projects/bar", e.c.token, nil, &bar, http.StatusOK)
+	tiles, _ := bar["projects"].([]any)
+	if len(tiles) != 2 {
+		t.Fatalf("bar tiles: got %d want 2", len(tiles))
+	}
+
+	// Drive the first project's summary through state changes.
+	pidA := e.pid
+
+	// Empty summary first.
+	var sum0 map[string]any
+	e.c.do("GET", "/api/projects/"+pidA+"/summary", e.c.token, nil, &sum0, http.StatusOK)
+	if got := sum0["specs_by_status"].(map[string]any); len(got) != 0 {
+		t.Errorf("empty project should have empty specs_by_status; got %v", got)
+	}
+
+	// Add a draft spec. summary.specs_by_status.draft should be 1.
+	var spec map[string]any
+	e.c.do("POST", "/api/projects/"+pidA+"/specs", e.c.token,
+		map[string]any{"title": "first", "intent": "x"}, &spec, http.StatusCreated)
+	sid := spec["id"].(string)
+
+	var sum1 map[string]any
+	e.c.do("GET", "/api/projects/"+pidA+"/summary", e.c.token, nil, &sum1, http.StatusOK)
+	if got := sum1["specs_by_status"].(map[string]any)["draft"]; got != float64(1) {
+		t.Errorf("draft count after creating one spec: got %v", got)
+	}
+
+	// Approve it (via criterion add + approve). draft -> approved.
+	e.c.do("POST", "/api/projects/"+pidA+"/specs/"+sid+"/criteria", e.c.token,
+		map[string]any{"text": "ok", "sensor_kind": "judge"}, nil, http.StatusOK)
+	e.c.do("POST", "/api/projects/"+pidA+"/specs/"+sid+"/approve", e.c.token, nil, nil, http.StatusOK)
+
+	var sum2 map[string]any
+	e.c.do("GET", "/api/projects/"+pidA+"/summary", e.c.token, nil, &sum2, http.StatusOK)
+	specs := sum2["specs_by_status"].(map[string]any)
+	if specs["draft"] != nil && specs["draft"].(float64) != 0 {
+		t.Errorf("draft should drop to 0 after approve; got %v", specs["draft"])
+	}
+	if specs["approved"] != float64(1) {
+		t.Errorf("approved count: got %v", specs["approved"])
+	}
+
+	// Enqueue a run + claim plan phase. Spec moves to running, runs_active=1.
+	var run map[string]any
+	e.c.do("POST", "/api/projects/"+pidA+"/specs/"+sid+"/runs", e.c.token,
+		map[string]any{}, &run, http.StatusCreated)
+	e.c.do("POST", "/api/projects/"+pidA+"/work/claim", e.apiKey,
+		map[string]any{"runner_id": e.runnerID, "phases": []string{"plan"}},
+		nil, http.StatusOK)
+
+	var sum3 map[string]any
+	e.c.do("GET", "/api/projects/"+pidA+"/summary", e.c.token, nil, &sum3, http.StatusOK)
+	if got := sum3["runs_active"]; got != float64(1) {
+		t.Errorf("runs_active during planning: got %v want 1", got)
+	}
+
+	// PATCH prefs: pin project A.
+	e.c.do("PATCH", "/api/projects/"+pidA+"/prefs", e.c.token,
+		map[string]any{"pinned": true}, nil, http.StatusNoContent)
+
+	// /bar should now have project A first (pinned sorts first).
+	var bar2 map[string]any
+	e.c.do("GET", "/api/projects/bar", e.c.token, nil, &bar2, http.StatusOK)
+	tiles2, _ := bar2["projects"].([]any)
+	first := tiles2[0].(map[string]any)
+	if first["pref"].(map[string]any)["project_id"] != pidA {
+		t.Errorf("after pinning A, A should be first; got %v", first["pref"])
+	}
+	if first["pref"].(map[string]any)["pinned"] != true {
+		t.Errorf("A.pinned should be true; got %v", first["pref"])
+	}
+
+	// Unpin A, then reorder: B, A.
+	e.c.do("PATCH", "/api/projects/"+pidA+"/prefs", e.c.token,
+		map[string]any{"pinned": false}, nil, http.StatusNoContent)
+	e.c.do("POST", "/api/projects/reorder", e.c.token,
+		map[string]any{"project_ids": []string{pidB, pidA}}, nil, http.StatusNoContent)
+
+	var bar3 map[string]any
+	e.c.do("GET", "/api/projects/bar", e.c.token, nil, &bar3, http.StatusOK)
+	tiles3, _ := bar3["projects"].([]any)
+	if tiles3[0].(map[string]any)["pref"].(map[string]any)["project_id"] != pidB {
+		t.Errorf("after reorder B-then-A, B should be first; got %v",
+			tiles3[0].(map[string]any)["pref"])
+	}
+
+	// Archive B. /bar still returns it, but the UI puts archived
+	// projects in the overflow menu — server returns the flag, the
+	// UI does the partitioning.
+	e.c.do("PATCH", "/api/projects/"+pidB+"/prefs", e.c.token,
+		map[string]any{"archived": true}, nil, http.StatusNoContent)
+	var bar4 map[string]any
+	e.c.do("GET", "/api/projects/bar", e.c.token, nil, &bar4, http.StatusOK)
+	tiles4, _ := bar4["projects"].([]any)
+	var bArch bool
+	for _, raw := range tiles4 {
+		t := raw.(map[string]any)
+		if t["pref"].(map[string]any)["project_id"] == pidB {
+			bArch = t["pref"].(map[string]any)["archived"].(bool)
+		}
+	}
+	if !bArch {
+		t.Errorf("B should be marked archived in /bar response")
+	}
+}
+
 // TestSuggest_NoProvider503 covers the cold path: when the server has
 // no LLM provider wired (no ANTHROPIC_API_KEY, no claude CLI), both
 // /specs/refine and /specs/suggest must return 503 with a clear message

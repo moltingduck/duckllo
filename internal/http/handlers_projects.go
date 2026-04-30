@@ -59,6 +59,132 @@ func (s *Server) handleListProjects(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, projects)
 }
 
+// handleProjectBar is the project-bar's "fetch everything I need to
+// render" call. Returns each project the user belongs to plus the
+// user's prefs (position / pinned / archived) plus a per-project
+// summary (counts of specs by status, runs awaiting review, etc.).
+// One round trip on initial render; SSE-driven refreshes use the
+// per-project /summary endpoint below.
+func (s *Server) handleProjectBar(w http.ResponseWriter, r *http.Request) {
+	user := userFromCtx(r)
+	if user == nil {
+		writeError(w, http.StatusUnauthorized, "auth required")
+		return
+	}
+	st := store.New(s.pool)
+	projects, err := st.ListProjectsWithPrefs(r.Context(), user.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	type tile struct {
+		Pref    store.ProjectPref     `json:"pref"`
+		Name    string                `json:"name"`
+		Desc    string                `json:"description"`
+		Summary *store.ProjectSummary `json:"summary"`
+	}
+	tiles := make([]tile, 0, len(projects))
+	for _, p := range projects {
+		sum, err := st.ProjectSummaryFor(r.Context(), p.ProjectID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		tiles = append(tiles, tile{
+			Pref: store.ProjectPref{
+				ProjectID: p.ProjectID, Position: p.Position,
+				Pinned: p.Pinned, Archived: p.Archived,
+			},
+			Name:    p.Name,
+			Desc:    p.Description,
+			Summary: sum,
+		})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"projects": tiles})
+}
+
+// handleProjectSummary returns the live counts for one project. The
+// project bar calls this when it sees an SSE event on that project's
+// channel — re-issuing the bar fetch for every event would scan every
+// project every time, this is the targeted refresh path.
+func (s *Server) handleProjectSummary(w http.ResponseWriter, r *http.Request) {
+	p := projectFromCtx(r)
+	if p == nil {
+		writeError(w, http.StatusNotFound, "project not loaded")
+		return
+	}
+	sum, err := store.New(s.pool).ProjectSummaryFor(r.Context(), p.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, sum)
+}
+
+type patchPrefsReq struct {
+	Pinned   *bool `json:"pinned,omitempty"`
+	Archived *bool `json:"archived,omitempty"`
+}
+
+// handlePatchProjectPrefs flips this user's pin/archive state for the
+// project. Doesn't touch position — that goes through reorder so the
+// drag operation can write all positions in one transaction.
+func (s *Server) handlePatchProjectPrefs(w http.ResponseWriter, r *http.Request) {
+	user := userFromCtx(r)
+	p := projectFromCtx(r)
+	if user == nil || p == nil {
+		writeError(w, http.StatusUnauthorized, "auth + project required")
+		return
+	}
+	var req patchPrefsReq
+	if err := decodeJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := store.New(s.pool).SetProjectPrefs(r.Context(), user.ID, p.ID, nil, req.Pinned, req.Archived); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+type reorderReq struct {
+	ProjectIDs []string `json:"project_ids"`
+}
+
+// handleReorderProjects writes each id's index as its position in one
+// transaction. The UI sends the post-drag order; the server doesn't
+// validate that the user has access to every id (the FK + the per-row
+// user_id constraint will happily ignore foreign IDs because no row
+// will be inserted/updated for a (this user, foreign project) pair).
+// Caller is responsible for sending only IDs they're a member of.
+func (s *Server) handleReorderProjects(w http.ResponseWriter, r *http.Request) {
+	user := userFromCtx(r)
+	if user == nil {
+		writeError(w, http.StatusUnauthorized, "auth required")
+		return
+	}
+	var req reorderReq
+	if err := decodeJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	ids := make([]uuid.UUID, 0, len(req.ProjectIDs))
+	for _, s := range req.ProjectIDs {
+		id, err := uuid.Parse(s)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "invalid project id "+s)
+			return
+		}
+		ids = append(ids, id)
+	}
+	if err := store.New(s.pool).ReorderProjects(r.Context(), user.ID, ids); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func (s *Server) handleGetProject(w http.ResponseWriter, r *http.Request) {
 	p := projectFromCtx(r)
 	if p == nil {

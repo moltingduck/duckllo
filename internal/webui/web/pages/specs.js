@@ -22,10 +22,18 @@ export async function render(mount, params) {
     filterRow.appendChild(el("button", { class: "secondary", "data-status": s }, s));
   }
   filterRow.appendChild(el("span", { class: "spacer" }));
-  const steeringBtn = el("button", { class: "secondary" }, "Steering");
+  // Steering = the project's harness rules + recurring-failures view.
+  // Naming it "Steering" is opaque if you haven't read CLAUDE.md, so a
+  // help tooltip explains the concept.
+  const steeringBtn = el("button", {
+    class: "secondary help-tip",
+    title: "Steering: edit the project's harness rules — guides the runner concatenates into every iteration's prompt — and review recurring failure patterns. This is where you teach the harness 'don't make this mistake again' instead of correcting it inline each time.",
+  }, "Steering");
   steeringBtn.addEventListener("click", () => go(`/projects/${pid}/steering`));
   filterRow.appendChild(steeringBtn);
-  const newBtn = el("button", {}, "New spec");
+  const newBtn = el("button", {
+    title: "Compose a new spec: title, intent, and typed acceptance criteria. Approving the spec freezes the criteria and unlocks 'Start run'.",
+  }, "New spec");
   newBtn.addEventListener("click", () => go(`/projects/${pid}/specs/new`));
   filterRow.appendChild(newBtn);
   mount.appendChild(filterRow);
