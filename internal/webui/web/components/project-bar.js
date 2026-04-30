@@ -156,57 +156,100 @@ function renderBadges(t) {
   return badges;
 }
 
-// attachHoverCard renders the full per-status breakdown in a popover
-// the cursor opens on the tile. Delayed open + immediate close so it
-// doesn't flash during a drag or quick mouseover.
+// attachHoverCard renders the per-status breakdown as a floating
+// card. The card mounts on document.body (not on the tile) and
+// positions itself with `position: fixed` from the tile's bounding
+// rect — that way it floats over scrollable containers without
+// getting clipped, and looks consistent regardless of how the bar is
+// scrolled. Delayed open + immediate close so a quick mouseover or
+// drag doesn't flash a card.
 function attachHoverCard(tile, t) {
   let openTimer = null;
   let card = null;
+
+  function build(s) {
+    // Compact one-row-per-bucket layout: muted label, then a chain
+    // of `count name · count name` pairs. Reads at a glance instead
+    // of forcing the eye down a tall list of rows.
+    function chain(pairs) {
+      const out = [];
+      pairs.forEach(([n, name, hint], i) => {
+        if (i > 0) out.push(el("span", { class: "project-bar__sep" }, "·"));
+        out.push(el("span", {
+          class: "project-bar__chain-item" + (n > 0 ? "" : " zero"),
+          title: hint,
+        }, [
+          el("span", { class: "project-bar__chain-num" }, String(n)),
+          " ",
+          el("span", { class: "project-bar__chain-label" }, name),
+        ]));
+      });
+      return out;
+    }
+
+    const specRow = chain([
+      [s.specs_by_status?.draft     || 0, "draft",     "Title and intent still mutable"],
+      [s.specs_by_status?.proposed  || 0, "proposed",  "Submitted for review; PM hasn't approved"],
+      [s.specs_by_status?.approved  || 0, "approved",  "Criteria frozen; ready to run"],
+      [s.specs_by_status?.running   || 0, "running",   "A run is in flight"],
+      [s.specs_by_status?.validated || 0, "validated", "Run finished; awaiting merge"],
+    ]);
+    const runRow = chain([
+      [s.runs_active     || 0, "active",     "Any non-terminal run"],
+      [s.runs_validating || 0, "reviewing",  "Parked in 'validating' awaiting human verdict"],
+      [s.runs_correcting || 0, "correcting", "Fix-loop in flight"],
+    ]);
+
+    return el("div", { class: "project-bar__hover-card" }, [
+      el("div", { class: "project-bar__hover-title" }, t.name),
+      t.description
+        ? el("div", { class: "project-bar__hover-desc muted" }, t.description)
+        : null,
+      el("div", { class: "project-bar__hover-row" }, [
+        el("span", { class: "project-bar__hover-key" }, "specs"),
+        el("span", { class: "project-bar__hover-chain" }, specRow),
+      ]),
+      el("div", { class: "project-bar__hover-row" }, [
+        el("span", { class: "project-bar__hover-key" }, "runs"),
+        el("span", { class: "project-bar__hover-chain" }, runRow),
+      ]),
+      (s.open_annotations || 0) > 0
+        ? el("div", { class: "project-bar__hover-row alert" }, [
+            el("span", { class: "project-bar__hover-key" }, "alerts"),
+            el("span", {}, [
+              el("span", { class: "project-bar__chain-num warn" }, String(s.open_annotations)),
+              " ", el("span", { class: "project-bar__chain-label" }, "open annotations"),
+            ]),
+          ])
+        : null,
+    ]);
+  }
+
+  function position() {
+    if (!card) return;
+    const r = tile.getBoundingClientRect();
+    // Pin under the tile by default; flip up if it would overflow
+    // the viewport bottom. Always nudge inside the right edge.
+    card.style.left = Math.max(8, Math.min(r.left, window.innerWidth - 320 - 8)) + "px";
+    const cardH = card.offsetHeight || 120;
+    if (r.bottom + cardH + 12 > window.innerHeight) {
+      card.style.top = Math.max(8, r.top - cardH - 8) + "px";
+    } else {
+      card.style.top = (r.bottom + 6) + "px";
+    }
+  }
+
   function open() {
     close();
-    const s = t.summary || { specs_by_status: {} };
-    const rows = [
-      ["Drafts",        s.specs_by_status.draft     || 0, "Specs in draft — title and intent are still mutable"],
-      ["Proposed",      s.specs_by_status.proposed  || 0, "Submitted for review; PM hasn't approved yet"],
-      ["Approved",      s.specs_by_status.approved  || 0, "Ready to enqueue a run; criteria are frozen"],
-      ["Running",       s.specs_by_status.running   || 0, "A run is in flight (plan/execute/validate/correct)"],
-      ["Validated",     s.specs_by_status.validated || 0, "Run finished; awaiting human merge"],
-      ["Merged",        s.specs_by_status.merged    || 0, "Done"],
-      ["Rejected",      s.specs_by_status.rejected  || 0, "Closed without shipping"],
-    ];
-    const list = rows.filter(([, n]) => n > 0).map(([label, n, hint]) =>
-      el("li", { title: hint }, [
-        el("span", { class: "project-bar__hover-label" }, label),
-        el("span", { class: "project-bar__hover-count" }, String(n)),
-      ]));
-    if (list.length === 0) list.push(el("li", { class: "muted" }, "no specs yet"));
-
-    const runs = el("div", { class: "project-bar__hover-runs" }, [
-      el("div", {}, [
-        el("span", {}, "active runs: "),
-        el("strong", {}, String(s.runs_active || 0)),
-      ]),
-      el("div", {}, [
-        el("span", {}, "awaiting review: "),
-        el("strong", { class: s.runs_validating ? "warn" : "" }, String(s.runs_validating || 0)),
-      ]),
-      el("div", {}, [
-        el("span", {}, "correcting: "),
-        el("strong", {}, String(s.runs_correcting || 0)),
-      ]),
-      el("div", {}, [
-        el("span", {}, "open annotations: "),
-        el("strong", {}, String(s.open_annotations || 0)),
-      ]),
-    ]);
-
-    card = el("div", { class: "project-bar__hover-card" }, [
-      el("div", { class: "project-bar__hover-title" }, t.name),
-      el("div", { class: "project-bar__hover-desc muted" }, t.description || "no description"),
-      el("ul", {}, list),
-      runs,
-    ]);
-    tile.appendChild(card);
+    card = build(t.summary || { specs_by_status: {} });
+    document.body.appendChild(card);
+    // requestAnimationFrame so the .show class triggers the fade-in
+    // transition rather than appearing fully visible immediately.
+    requestAnimationFrame(() => {
+      position();
+      card.classList.add("show");
+    });
+    window.addEventListener("scroll", close, { once: true, capture: true });
   }
   function close() {
     if (card) { card.remove(); card = null; }

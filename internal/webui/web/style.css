@@ -115,26 +115,52 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .project-bar__badge-icon { font-size: 10px; }
 .project-bar__badge-empty { font-size: 11px; }
 
-/* Hover detail card: full per-status breakdown. Floats below the tile,
-   does not block drag (dragstart on the tile fires before our hover
-   delay). z-index keeps it above the next row's tiles when scrolling. */
+/* Floating detail card. Mounts on document.body with position:fixed
+   so it never gets clipped by the topbar's overflow:hidden, and the
+   layout is one compact row per category — name · description ·
+   specs chain · runs chain · alerts (only when there are any). */
 .project-bar__hover-card {
-  position: absolute; top: calc(100% + 4px); left: 0; z-index: 20;
-  min-width: 240px; padding: 10px 12px;
-  background: var(--bg-card); border: 1px solid var(--border); border-radius: 6px;
-  box-shadow: 0 4px 12px rgba(0,0,0,0.4);
-  font-size: 12px; cursor: default;
+  position: fixed; z-index: 1000;
+  width: 320px; max-width: calc(100vw - 16px);
+  padding: 10px 12px;
+  background: rgba(22,27,34,0.96);
+  border: 1px solid var(--border); border-radius: 8px;
+  box-shadow: 0 12px 32px rgba(0,0,0,0.5), 0 1px 2px rgba(0,0,0,0.4);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  font-size: 12px; line-height: 1.4; cursor: default; pointer-events: none;
+  opacity: 0; transform: translateY(-2px);
+  transition: opacity 90ms ease-out, transform 120ms ease-out;
 }
-.project-bar__hover-title { font-weight: 600; margin-bottom: 2px; }
-.project-bar__hover-desc { font-size: 11px; margin-bottom: 8px; }
-.project-bar__hover-card ul { list-style: none; padding: 0; margin: 0 0 8px; }
-.project-bar__hover-card li {
-  display: flex; justify-content: space-between; padding: 2px 0;
+.project-bar__hover-card.show { opacity: 1; transform: translateY(0); }
+
+.project-bar__hover-title {
+  font-weight: 600; font-size: 13px; letter-spacing: -0.01em;
+  margin-bottom: 2px;
 }
-.project-bar__hover-label { color: var(--fg-dim); }
-.project-bar__hover-count { font-family: var(--mono); }
-.project-bar__hover-runs > div { display: flex; justify-content: space-between; padding: 2px 0; font-size: 12px; }
-.project-bar__hover-runs strong.warn { color: var(--warn); }
+.project-bar__hover-desc {
+  font-size: 11px; line-height: 1.35; margin-bottom: 8px;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.project-bar__hover-row {
+  display: flex; gap: 8px; align-items: baseline; padding: 3px 0;
+}
+.project-bar__hover-row.alert { color: var(--warn); }
+.project-bar__hover-key {
+  flex: 0 0 52px; color: var(--fg-dim); font-size: 11px; text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.project-bar__hover-chain {
+  flex: 1; display: inline-flex; flex-wrap: wrap; gap: 2px 4px; align-items: baseline;
+}
+.project-bar__chain-item { font-size: 12px; }
+.project-bar__chain-item.zero { color: var(--fg-dim); }
+.project-bar__chain-num { font-family: var(--mono); font-weight: 600; }
+.project-bar__chain-num.warn { color: var(--warn); }
+.project-bar__chain-label { font-size: 11px; color: var(--fg-dim); }
+.project-bar__chain-item:not(.zero) .project-bar__chain-label { color: var(--fg); }
+.project-bar__sep { color: var(--fg-dim); padding: 0 1px; }
 
 .project-bar__overflow { position: relative; }
 .project-bar__overflow-btn {
