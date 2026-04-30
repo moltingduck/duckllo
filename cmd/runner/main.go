@@ -91,7 +91,29 @@ func main() {
 		log.Fatalf("workspace: %v", err)
 	}
 
-	roles := splitTrim(*rolesFlag, ",")
+	// Map the user-friendly role flag values (planner / executor /
+	// validator / corrector) to the phase names the work_queue
+	// actually stores (plan / execute / validate / correct). Without
+	// this the claim's phase filter excludes every pending row and
+	// the runner sits at "no work" forever — which only became
+	// visible once the SQL precedence fix made the phase filter
+	// actually apply to pending rows.
+	rolePhase := map[string]string{
+		"planner": "plan", "executor": "execute",
+		"validator": "validate", "corrector": "correct",
+		// pass-through for callers that already use phase names.
+		"plan": "plan", "execute": "execute",
+		"validate": "validate", "correct": "correct",
+	}
+	rawRoles := splitTrim(*rolesFlag, ",")
+	roles := make([]string, 0, len(rawRoles))
+	for _, r := range rawRoles {
+		if p, ok := rolePhase[r]; ok {
+			roles = append(roles, p)
+		} else {
+			log.Fatalf("unknown role %q (want one of: planner, executor, validator, corrector)", r)
+		}
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
