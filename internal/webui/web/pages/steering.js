@@ -7,6 +7,35 @@ import { go, el, escapeHTML } from "/router.js";
 import { toast } from "/toast.js";
 
 const RULE_KINDS = ["agents_md", "skill", "lint_config", "architectural_rule", "judge_prompt"];
+const PEVC_PHASES = ["plan", "execute", "validate", "correct"];
+
+// renderPhasePicker returns a row of toggleable phase chips for one
+// rule. Empty selection = "applies to every phase" (the rule body
+// just shows up in every prompt). Returns the live state object so
+// the caller can read getPhases() at save time.
+function renderPhasePicker(currentPhases) {
+  const state = new Set(currentPhases || []);
+  const wrap = el("div", { class: "row", style: "gap:4px;flex-wrap:wrap;margin:6px 0" });
+  PEVC_PHASES.forEach((p) => {
+    const chip = el("button", {
+      class: "secondary chip" + (state.has(p) ? " active" : ""),
+      type: "button",
+      title: "Inject this rule into the " + p + " phase prompt",
+    }, p);
+    chip.addEventListener("click", () => {
+      if (state.has(p)) state.delete(p); else state.add(p);
+      chip.classList.toggle("active");
+    });
+    wrap.appendChild(chip);
+  });
+  const hint = el("span", {
+    class: "muted",
+    style: "font-size:11px;margin-left:6px",
+    title: "Empty selection means the rule fires in every phase. Pick one or more chips to scope it.",
+  }, "(none = all phases)");
+  wrap.appendChild(hint);
+  return { wrap, getPhases: () => Array.from(state) };
+}
 
 export async function render(mount, params) {
   const { pid } = params;
@@ -118,41 +147,86 @@ async function renderRules(mount, pid) {
 
   mount.innerHTML = "";
   mount.appendChild(el("h2", {}, "Harness rules"));
+  mount.appendChild(el("p", { class: "muted" },
+    "Rules are concatenated into the runner's prompt. Each rule can be scoped to specific PEVC phases — leave the chips empty to apply it to every phase, or click chips to restrict (e.g. a judge_prompt only matters in 'validate')."));
 
-  if (rules.length === 0) {
-    mount.appendChild(el("p", { class: "empty" }, "No rules yet. Create one below."));
-  } else {
-    const list = el("div", { class: "spec-list" });
-    for (const r of rules) {
-      const row = el("div", { class: "card" }, [
-        el("div", { class: "row" }, [
-          el("strong", {}, r.name),
-          el("span", { class: "pill mono" }, r.kind),
-          el("span", { class: "spacer" }),
-          el("label", { class: "row", style: "gap:6px" }, [
-            el("input", { type: "checkbox", ...(r.enabled ? { checked: "" } : {}) }),
-            el("span", { class: "muted" }, r.enabled ? "enabled" : "disabled"),
-          ]),
-        ]),
-        el("textarea", { rows: "6", value: r.body || "" }),
-        el("div", { class: "row", style: "gap:8px;margin-top:8px" }, [
-          el("button", { class: "secondary" }, "Save"),
-          el("button", { class: "danger" }, "Delete"),
+  // Phase filter: shows only rules that apply to the chosen phase.
+  // 'all' means no filter — show every rule regardless of scope.
+  let filterPhase = "all";
+  const filterRow = el("div", { class: "row", style: "gap:6px;margin-bottom:14px" });
+  filterRow.appendChild(el("span", {
+    class: "muted help-tip",
+    title: "Filter rules to those that fire in the selected phase. 'All' shows everything.",
+  }, "Filter:"));
+  const filterBtns = [];
+  ["all", ...PEVC_PHASES].forEach((p) => {
+    const b = el("button", {
+      class: p === "all" ? "" : "secondary",
+      type: "button",
+    }, p);
+    b.addEventListener("click", () => {
+      filterPhase = p;
+      filterBtns.forEach((x) => { x.className = (x.textContent === filterPhase) ? "" : "secondary"; });
+      renderList();
+    });
+    filterRow.appendChild(b);
+    filterBtns.push(b);
+  });
+  mount.appendChild(filterRow);
+
+  const listEl = el("div", { class: "spec-list" });
+  mount.appendChild(listEl);
+
+  function ruleMatchesFilter(r) {
+    if (filterPhase === "all") return true;
+    if (!r.phases || r.phases.length === 0) return true; // empty = all phases
+    return r.phases.includes(filterPhase);
+  }
+
+  function renderList() {
+    listEl.innerHTML = "";
+    const visible = rules.filter(ruleMatchesFilter);
+    if (visible.length === 0) {
+      listEl.appendChild(el("p", { class: "empty" },
+        filterPhase === "all"
+          ? "No rules yet. Create one below."
+          : `No rules apply to phase '${filterPhase}'.`));
+      return;
+    }
+    for (const r of visible) {
+      const phaseChips = (r.phases && r.phases.length > 0)
+        ? r.phases.map((p) => el("span", { class: "pill mono" }, p))
+        : [el("span", { class: "muted", style: "font-size:11px" }, "all phases")];
+      const head = el("div", { class: "row" }, [
+        el("strong", {}, r.name),
+        el("span", { class: "pill mono" }, r.kind),
+        ...phaseChips,
+        el("span", { class: "spacer" }),
+        el("label", { class: "row", style: "gap:6px" }, [
+          el("input", { type: "checkbox", ...(r.enabled ? { checked: "" } : {}) }),
+          el("span", { class: "muted" }, r.enabled ? "enabled" : "disabled"),
         ]),
       ]);
-
-      const checkbox = row.querySelector('input[type="checkbox"]');
-      const textarea = row.querySelector("textarea");
-      const [saveBtn, delBtn] = row.querySelectorAll("button");
-
-      // textarea is created with value attr but textarea content is set via .value
+      const picker = renderPhasePicker(r.phases);
+      const textarea = el("textarea", { rows: "6" });
       textarea.value = r.body || "";
+      const actions = el("div", { class: "row", style: "gap:8px;margin-top:8px" }, [
+        el("button", { class: "secondary" }, "Save"),
+        el("button", { class: "danger" }, "Delete"),
+      ]);
+      const row = el("div", { class: "card" }, [head, picker.wrap, textarea, actions]);
+      const checkbox = head.querySelector('input[type="checkbox"]');
+      const [saveBtn, delBtn] = actions.querySelectorAll("button");
 
       saveBtn.addEventListener("click", async () => {
         try {
-          await patch(`/api/projects/${pid}/harness-rules/${r.id}`,
-            { body: textarea.value, enabled: checkbox.checked });
+          await patch(`/api/projects/${pid}/harness-rules/${r.id}`, {
+            body: textarea.value,
+            enabled: checkbox.checked,
+            phases: picker.getPhases(),
+          });
           toast("Saved " + r.name);
+          renderRules(mount, pid);
         } catch (err) { toast(err.message, "error"); }
       });
       delBtn.addEventListener("click", async () => {
@@ -163,10 +237,10 @@ async function renderRules(mount, pid) {
           renderRules(mount, pid);
         } catch (err) { toast(err.message, "error"); }
       });
-      list.appendChild(row);
+      listEl.appendChild(row);
     }
-    mount.appendChild(list);
   }
+  renderList();
 
   // Create form. If we landed here via the "Encode as rule" button on
   // the recurring-failures tab, sessionStorage carries a draft that we
@@ -181,6 +255,7 @@ async function renderRules(mount, pid) {
   const nameInput = el("input", { type: "text", placeholder: "e.g. House style — short PR titles" });
   const kindInput = el("select", {}, RULE_KINDS.map((k) => el("option", { value: k, ...(draft && draft.kind === k ? { selected: "" } : {}) }, k)));
   const bodyInput = el("textarea", { rows: "6", placeholder: "What the agent should do or avoid. This text is concatenated into the runner's per-iteration system prompt." });
+  const newPicker = renderPhasePicker([]);
   if (draft) {
     nameInput.value = draft.name || "";
     bodyInput.value = draft.body || "";
@@ -193,6 +268,7 @@ async function renderRules(mount, pid) {
     try {
       await post(`/api/projects/${pid}/harness-rules`, {
         kind: kindInput.value, name: nameInput.value.trim(), body: bodyInput.value,
+        phases: newPicker.getPhases(),
       });
       toast("Created");
       nameInput.value = ""; bodyInput.value = "";
@@ -201,7 +277,8 @@ async function renderRules(mount, pid) {
   });
   const card = el("div", { class: "card", style: "max-width:720px" }, [
     el("label", {}, "Name"), nameInput,
-    el("label", {}, "Kind"), kindInput,
+    el("label", { class: "help-tip", title: "How the rule reaches the agent. agents_md is general guidance; skill is a how-to recipe; lint_config / architectural_rule are stricter; judge_prompt is validate-phase only." }, "Kind"), kindInput,
+    el("label", { class: "help-tip", title: "Empty = applies to every phase. Click chips to scope." }, "Phases"), newPicker.wrap,
     el("label", {}, "Body"), bodyInput,
     el("div", { style: "margin-top:10px" }, create),
   ]);

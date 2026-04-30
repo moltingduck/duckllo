@@ -46,7 +46,7 @@ type Orchestrator struct {
 
 // Run performs one phase of work for a claimed run+work_item.
 func (o *Orchestrator) Run(ctx context.Context, work *client.WorkItem, run *client.Run) error {
-	bundle, err := o.Client.Bundle(ctx, work.RunID)
+	bundle, err := o.Client.Bundle(ctx, work.RunID, work.Phase)
 	if err != nil {
 		return fmt.Errorf("bundle: %w", err)
 	}
@@ -158,7 +158,10 @@ func (o *Orchestrator) openWorkspace(ctx context.Context, run *client.Run) (work
 // (done|failed|aborted) so the orchestrator knows it's safe to remove the
 // container. Done by re-fetching the run after the phase ran.
 func (o *Orchestrator) runShouldTearDown(ctx context.Context, runID uuid.UUID) bool {
-	r, err := o.Client.Bundle(ctx, runID)
+	// No phase needed here — we only inspect run.status. Pass "" to
+	// keep the legacy bundle behaviour (returns all rules; cheap
+	// since we ignore them).
+	r, err := o.Client.Bundle(ctx, runID, "")
 	if err != nil {
 		return false
 	}

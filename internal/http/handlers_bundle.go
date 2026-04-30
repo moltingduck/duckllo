@@ -1,12 +1,15 @@
 package http
 
 import (
+	"encoding/json"
 	"errors"
 	"net/http"
 
 	"github.com/google/uuid"
 
 	"github.com/moltingduck/duckllo/internal/models"
+	"github.com/moltingduck/duckllo/internal/runner/client"
+	"github.com/moltingduck/duckllo/internal/runner/orchestrator"
 	"github.com/moltingduck/duckllo/internal/store"
 )
 
@@ -51,7 +54,12 @@ func (s *Server) handleBundle(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	rules, err := st.ListEnabledRules(r.Context(), spec.ProjectID, spec.TopologyID)
+	// Filter rules by the current run phase if the runner asked for
+	// one (e.g. ?phase=validate). Without a phase param we keep the
+	// old behaviour of returning every enabled rule, so older runner
+	// versions still work.
+	phase := r.URL.Query().Get("phase")
+	rules, err := st.ListEnabledRulesForPhase(r.Context(), spec.ProjectID, spec.TopologyID, phase)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -91,4 +99,78 @@ type bundleResponse struct {
 	Iterations      []models.Iteration     `json:"iterations"`
 	Verifications   []models.Verification  `json:"verifications"`
 	OpenAnnotations []models.Annotation    `json:"open_annotations"`
+}
+
+// handleRunPreview returns the assembled prompt for a given (run,
+// phase) as labeled segments — what the agent would see if a runner
+// claimed this phase right now. Each segment carries source metadata
+// and an editable URL so the UI can render "this paragraph came from
+// harness rule X, click to edit" affordances. Mirrors the runner's
+// real prompt assembly via orchestrator.PreviewFor so the preview
+// can never drift from what the model actually sees.
+func (s *Server) handleRunPreview(w http.ResponseWriter, r *http.Request) {
+	rid, err := uuid.Parse(chiURLParam(r, "runID"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid run id")
+		return
+	}
+	phase := r.URL.Query().Get("phase")
+	if !validPhase(phase) {
+		writeError(w, http.StatusBadRequest, "phase query param required (plan|execute|validate|correct)")
+		return
+	}
+	st := store.New(s.pool)
+	run, err := st.RunByID(r.Context(), rid)
+	if errors.Is(err, store.ErrNotFound) {
+		writeError(w, http.StatusNotFound, "run not found")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if !runBelongsToProject(s, r, run) {
+		writeError(w, http.StatusNotFound, "run not in this project")
+		return
+	}
+	spec, err := st.SpecByID(r.Context(), run.SpecID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	var plan *models.Plan
+	if run.PlanID != (uuid.UUID{}) {
+		plan, _ = st.PlanByID(r.Context(), run.PlanID)
+	}
+	rules, err := st.ListEnabledRulesForPhase(r.Context(), spec.ProjectID, spec.TopologyID, phase)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	iterations, _ := st.ListIterations(r.Context(), run.ID)
+	verifications, _ := st.ListVerificationsForRun(r.Context(), run.ID)
+	openAnnos, _ := st.ListOpenAnnotationsForRun(r.Context(), run.ID)
+
+	bundle := bundleToClient(run, spec, plan, rules, iterations, verifications, openAnnos)
+	preview := orchestrator.PreviewFor(phase, bundle)
+	writeJSON(w, http.StatusOK, preview)
+}
+
+// bundleToClient converts the server-side bundle (store + models
+// types) into the runner-side client.Bundle that orchestrator's
+// prompt assembly consumes. JSON round-trip is the laziest correct
+// option — the wire shapes are designed to match — and it's cheap
+// since this is a UI-driven preview, not a hot path.
+func bundleToClient(run *models.Run, spec *models.Spec, plan *models.Plan,
+	rules []store.HarnessRule, iters []models.Iteration,
+	verifs []models.Verification, annos []models.Annotation) *client.Bundle {
+	wire := bundleResponse{
+		Run: run, Spec: spec, Plan: plan,
+		HarnessRules: rules, Iterations: iters,
+		Verifications: verifs, OpenAnnotations: annos,
+	}
+	raw, _ := json.Marshal(wire)
+	var b client.Bundle
+	_ = json.Unmarshal(raw, &b)
+	return &b
 }

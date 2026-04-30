@@ -63,69 +63,119 @@ OUTPUT CONTRACT: Reply with a single fenced code block tagged 'json':
 	return common
 }
 
-// userPromptFor renders the bundle as the role-specific user message body.
-// Verbose-but-deterministic; the model gets every signal it needs in one
-// turn so most tasks finish without re-prompting.
-func userPromptFor(role string, b *client.Bundle) string {
-	var sb strings.Builder
-	fmt.Fprintf(&sb, "## Spec\n**%s**\n\n%s\n\n", b.Spec.Title, b.Spec.Intent)
+// PromptSegment is one labeled chunk of the assembled prompt — a piece
+// the user can trace back to its source (a harness rule, the spec
+// intent, the plan, the workspace diff, etc.) and ideally edit. The
+// preview UI renders a list of these so the user knows exactly which
+// document is contributing each section of what the agent sees.
+type PromptSegment struct {
+	Source   string `json:"source"`             // spec | criteria | plan | harness_rule | workspace_diff | annotation | failed_sensor
+	SourceID string `json:"source_id,omitempty"` // e.g. harness rule UUID, criterion id
+	Heading  string `json:"heading"`            // human-readable e.g. "Harness rule: Trust the workspace diff"
+	EditURL  string `json:"edit_url,omitempty"` // hash route the UI links to so the user can jump straight to the edit page
+	Content  string `json:"content"`            // the actual text inserted into the prompt
+}
+
+// PromptPreview is what the preview endpoint hands the UI: the
+// system prompt the runner sends as a string (no segments — it's a
+// fixed role contract), plus the user message broken into traceable
+// segments.
+type PromptPreview struct {
+	Role   string          `json:"role"`
+	Phase  string          `json:"phase"`
+	System string          `json:"system"`
+	User   []PromptSegment `json:"user"`
+}
+
+// userPromptSegments is the labeled-segments form of the user message.
+// userPromptFor below joins them into a single string with the same
+// shape the runner has always used; both share this single source of
+// truth so the preview can never drift from what the runner actually
+// sends.
+func userPromptSegments(role string, b *client.Bundle) []PromptSegment {
+	var out []PromptSegment
+	specEdit := fmt.Sprintf("#/projects/%s/specs/%s", b.Run.SpecID, b.Spec.ID)
+
+	out = append(out, PromptSegment{
+		Source: "spec", SourceID: b.Spec.ID.String(),
+		Heading: "Spec — " + b.Spec.Title,
+		EditURL: specEdit,
+		Content: fmt.Sprintf("## Spec\n**%s**\n\n%s\n", b.Spec.Title, b.Spec.Intent),
+	})
 
 	if len(b.Spec.AcceptanceCriteria) > 0 {
-		fmt.Fprintln(&sb, "## Acceptance criteria")
 		var crits []map[string]any
 		_ = json.Unmarshal(b.Spec.AcceptanceCriteria, &crits)
+		var sb strings.Builder
+		fmt.Fprintln(&sb, "## Acceptance criteria")
 		for _, c := range crits {
 			fmt.Fprintf(&sb, "- [%s] (%s) %v\n", c["id"], c["sensor_kind"], c["text"])
 		}
-		fmt.Fprintln(&sb)
+		out = append(out, PromptSegment{
+			Source: "criteria", Heading: "Acceptance criteria",
+			EditURL: specEdit, Content: sb.String(),
+		})
 	}
 
 	if role != "planner" && len(b.Plan.Steps) > 0 {
-		fmt.Fprintln(&sb, "## Plan")
 		var steps []map[string]any
 		_ = json.Unmarshal(b.Plan.Steps, &steps)
+		var sb strings.Builder
+		fmt.Fprintln(&sb, "## Plan")
 		for _, s := range steps {
 			fmt.Fprintf(&sb, "%d. %s\n", intOf(s["order"]), s["summary"])
 		}
-		fmt.Fprintln(&sb)
+		out = append(out, PromptSegment{
+			Source: "plan", SourceID: b.Plan.ID.String(),
+			Heading: "Plan",
+			EditURL: specEdit, // plan lives on the spec page; same edit target
+			Content: sb.String(),
+		})
 	}
 
+	// Each harness rule is its own segment so the user can click
+	// straight to its edit page if a rule looks wrong in context.
 	if len(b.HarnessRules) > 0 {
-		fmt.Fprintln(&sb, "## Project guides")
+		// Project ID isn't on the bundle directly — get it via the
+		// spec's project link, threaded through Run on bundle JSON.
+		// Fall back to "" if absent so the link gracefully degrades.
+		projectID := b.Spec.ProjectID.String()
 		for _, r := range b.HarnessRules {
-			fmt.Fprintf(&sb, "### %s — %s\n%s\n\n", r.Kind, r.Name, r.Body)
+			out = append(out, PromptSegment{
+				Source: "harness_rule", SourceID: r.ID.String(),
+				Heading: "Harness rule: " + r.Name + " (" + r.Kind + ")",
+				EditURL: fmt.Sprintf("#/projects/%s/steering", projectID),
+				Content: fmt.Sprintf("### %s — %s\n%s\n", r.Kind, r.Name, r.Body),
+			})
 		}
 	}
 
-	// Validator + corrector both benefit from seeing the actual workspace
-	// changes the executor produced. Without this section the judge has
-	// no filesystem context on API providers and can only trust the
-	// executor's self-reported summary — which the dogfood loop's first
-	// run proved is unreliable.
+	// Validator + corrector see the workspace diff (the executor's
+	// real output, ground truth over the executor's self-reported
+	// summary).
 	if role == "validator" || role == "corrector" {
 		if diff := latestWorkspaceDiff(b); diff != "" {
-			fmt.Fprintln(&sb, "## Workspace changes (from `git diff` after execute)")
-			fmt.Fprintln(&sb, "```diff")
-			fmt.Fprintln(&sb, diff)
-			fmt.Fprintln(&sb, "```")
-			fmt.Fprintln(&sb)
+			out = append(out, PromptSegment{
+				Source: "workspace_diff", Heading: "Workspace changes (git diff after execute)",
+				Content: "## Workspace changes (from `git diff` after execute)\n```diff\n" + diff + "\n```\n",
+			})
 		}
 	}
 
 	if role == "corrector" && len(b.OpenAnnotations) > 0 {
+		var sb strings.Builder
 		fmt.Fprintln(&sb, "## Annotations to address")
 		for _, a := range b.OpenAnnotations {
 			fmt.Fprintf(&sb, "- [%s] %s — %s\n", a.Verdict, string(a.BBox), a.Body)
 		}
-		fmt.Fprintln(&sb)
+		out = append(out, PromptSegment{
+			Source: "annotation", Heading: "Open annotations to address",
+			EditURL: fmt.Sprintf("#/projects/%s/runs/%s", b.Spec.ProjectID, b.Run.ID),
+			Content: sb.String(),
+		})
 	}
 
 	if role == "corrector" && len(b.Verifications) > 0 {
-		// Filter to verifications the corrector actually needs to act on:
-		// fail / warn signals from any kind, plus the workspace_changes
-		// already covered by the diff section so we skip those here. Each
-		// row shows summary so the corrector knows *what* failed, not
-		// just *that* something failed.
 		var failures []client.Verification
 		for _, v := range b.Verifications {
 			if v.Kind == "" || v.Kind == "workspace_changes" {
@@ -136,6 +186,7 @@ func userPromptFor(role string, b *client.Bundle) string {
 			}
 		}
 		if len(failures) > 0 {
+			var sb strings.Builder
 			fmt.Fprintln(&sb, "## Failed / warning sensors")
 			for _, v := range failures {
 				summary := v.Summary
@@ -144,11 +195,59 @@ func userPromptFor(role string, b *client.Bundle) string {
 				}
 				fmt.Fprintf(&sb, "- [%s] (%s) %s\n", v.Status, v.Kind, summary)
 			}
-			fmt.Fprintln(&sb)
+			out = append(out, PromptSegment{
+				Source: "failed_sensor", Heading: "Failed / warning sensors",
+				EditURL: fmt.Sprintf("#/projects/%s/runs/%s", b.Spec.ProjectID, b.Run.ID),
+				Content: sb.String(),
+			})
 		}
 	}
 
+	return out
+}
+
+// userPromptFor renders the bundle as the role-specific user message
+// body. Verbose-but-deterministic; the model gets every signal it
+// needs in one turn so most tasks finish without re-prompting. Now a
+// thin string-joiner over userPromptSegments — keeps the preview
+// endpoint's output exactly what the runner actually sends.
+func userPromptFor(role string, b *client.Bundle) string {
+	var sb strings.Builder
+	for _, seg := range userPromptSegments(role, b) {
+		sb.WriteString(seg.Content)
+		sb.WriteString("\n")
+	}
 	return sb.String()
+}
+
+// PreviewFor builds the labeled preview the UI renders. Same role/phase
+// mapping the orchestrator uses (plan→planner, execute→executor,
+// validate→validator, correct→corrector). Exposed so internal/http can
+// call into it without re-implementing prompt assembly.
+func PreviewFor(phase string, b *client.Bundle) PromptPreview {
+	role := roleForPhase(phase)
+	return PromptPreview{
+		Role:   role,
+		Phase:  phase,
+		System: systemPromptFor(role),
+		User:   userPromptSegments(role, b),
+	}
+}
+
+// roleForPhase maps the work_queue phase to the agent role the
+// orchestrator dispatches it to. Mirrors the switch in Run().
+func roleForPhase(phase string) string {
+	switch phase {
+	case "plan":
+		return "planner"
+	case "execute":
+		return "executor"
+	case "validate":
+		return "validator"
+	case "correct":
+		return "corrector"
+	}
+	return ""
 }
 
 // extractJSONBlock pulls a single ```json ... ``` block out of the model

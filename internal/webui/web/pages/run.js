@@ -92,6 +92,12 @@ async function refresh(mount, pid, rid) {
     });
     actionRow.appendChild(complete);
   }
+  const previewBtn = el("button", {
+    class: "secondary",
+    title: "Show the assembled prompt the agent sees at each phase, with each segment labeled by its source so you can trace and edit it.",
+  }, "Preview prompt");
+  previewBtn.addEventListener("click", () => go(`/projects/${pid}/runs/${rid}/preview`));
+  actionRow.appendChild(previewBtn);
   const back = el("button", { class: "secondary" }, "Back to spec");
   back.addEventListener("click", () => go(`/projects/${pid}/specs/${run.spec_id}`));
   actionRow.appendChild(back);

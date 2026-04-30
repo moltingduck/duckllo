@@ -23,9 +23,10 @@ let sources = new Map();          // projectID -> EventSource (closed on render)
 
 export function ensureMount() {
   if (mountEl) return mountEl;
-  mountEl = document.createElement("div");
-  mountEl.id = "project-bar";
-  document.body.insertBefore(mountEl, document.querySelector("main"));
+  // The slot already lives inside #topbar so the bar renders in the
+  // same row as the brand logo and the userbox — no DOM creation here,
+  // just grab the pre-positioned element.
+  mountEl = document.getElementById("project-bar");
   return mountEl;
 }
 

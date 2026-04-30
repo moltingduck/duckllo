@@ -64,21 +64,26 @@ button.secondary, .btn.secondary {
 button.danger, .btn.danger { background: var(--fail); border-color: var(--fail); }
 button:disabled { opacity: 0.5; cursor: not-allowed; }
 
-/* Project bar: persistent horizontal row of project tiles above the
-   page content. Tile = name + status badges + hover detail card. Drag
-   to reorder, ★ to pin, ✕ to archive. Overflow "..." menu when there
-   are more than VISIBLE_LIMIT tiles (or any archived). */
+/* Project bar lives inside #topbar (see index.html), in the same row
+   as the brand and userbox. flex:1 lets it absorb the remaining width
+   between brand and userbox; horizontal scroll handles overflow when
+   the user has many projects. Tiles are compact — the full per-status
+   breakdown is in the hover card. */
 #project-bar {
-  background: var(--bg-card); border-bottom: 1px solid var(--border);
-  padding: 8px 16px;
+  flex: 1; min-width: 0;
+  display: flex; align-items: stretch; gap: 6px;
+  overflow-x: auto;
 }
 .project-bar__row {
-  display: flex; gap: 8px; align-items: stretch; flex-wrap: nowrap; overflow-x: auto;
+  display: flex; gap: 6px; align-items: stretch; flex-wrap: nowrap;
+  overflow-x: auto; min-width: 0;
 }
 .project-bar__tile {
-  position: relative; padding: 6px 10px; min-width: 160px;
-  background: rgba(255,255,255,0.02); border: 1px solid var(--border); border-radius: 6px;
-  cursor: grab; user-select: none;
+  position: relative; padding: 3px 8px;
+  display: flex; flex-direction: column; justify-content: center;
+  background: rgba(255,255,255,0.02); border: 1px solid var(--border); border-radius: 4px;
+  cursor: grab; user-select: none; min-width: 0;
+  font-size: 12px;
 }
 .project-bar__tile.pinned { border-color: var(--accent-dim); }
 .project-bar__tile.archived { opacity: 0.5; }
@@ -86,11 +91,11 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .project-bar__tile.drop-target { outline: 2px dashed var(--accent-dim); outline-offset: -2px; }
 
 .project-bar__head {
-  display: flex; align-items: center; gap: 4px; margin-bottom: 4px;
+  display: flex; align-items: center; gap: 3px;
 }
 .project-bar__name {
   flex: 1; font-weight: 500; color: var(--fg); text-decoration: none;
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 160px;
 }
 .project-bar__name:hover { color: var(--accent); }
 .project-bar__icon {
@@ -156,19 +161,37 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 }
 .project-bar__error { color: var(--fail); font-size: 12px; padding: 4px 0; }
 
-/* Help tooltip styling: any element with `help-tip` and a [title]
-   attribute renders the question-mark superscript and the system
-   tooltip. Used on phase nav items and form-field labels to explain
-   what each thing does (e.g. "Steering", "Intent", "sensor_kind"). */
-.help-tip::after {
-  content: "?";
-  display: inline-block; margin-left: 4px;
-  width: 13px; height: 13px; line-height: 13px; text-align: center;
-  font-size: 10px; font-weight: bold;
-  border-radius: 50%; border: 1px solid var(--fg-dim); color: var(--fg-dim);
-  cursor: help; vertical-align: middle;
+/* Prompt preview: each segment is a card with a source tag, an
+   "Edit source →" link, and the raw prompt content in a monospace
+   pre block so the user sees exactly what the agent gets. */
+.preview-header {
+  display: flex; align-items: center; gap: 4px; margin-bottom: 6px;
 }
-.help-tip:hover::after { color: var(--fg); border-color: var(--fg); }
+.preview-source-tag {
+  background: rgba(96,131,238,0.12); color: var(--accent); border-color: var(--accent-dim);
+}
+.preview-edit-link {
+  font-size: 12px; color: var(--accent); text-decoration: none;
+}
+.preview-edit-link:hover { text-decoration: underline; }
+.preview-content {
+  font-family: var(--mono); font-size: 12px;
+  white-space: pre-wrap; word-break: break-word;
+  margin: 0; padding: 8px 10px;
+  background: var(--bg); border: 1px solid var(--border); border-radius: 4px;
+  max-height: 360px; overflow: auto;
+}
+.preview-segment { margin-bottom: 8px; }
+
+/* Help tooltips: elements marked `help-tip` carry a [title] attribute
+   and underline subtly so the user knows there's hover text. The
+   native browser tooltip handles display — no question-mark badge. */
+.help-tip {
+  text-decoration: underline; text-decoration-style: dotted;
+  text-decoration-color: var(--fg-dim); text-underline-offset: 3px;
+  cursor: help;
+}
+.help-tip:hover { text-decoration-color: var(--fg); }
 
 /* Suggest-panel answer chips: clickable pills the user picks from
    instead of typing. Active state mirrors the chosen option back into

@@ -9,6 +9,7 @@ import * as specs    from "/pages/specs.js";
 import * as specNew  from "/pages/spec-new.js";
 import * as spec     from "/pages/spec.js";
 import * as run      from "/pages/run.js";
+import * as preview  from "/pages/preview.js";
 import * as steering from "/pages/steering.js";
 import * as projectBar from "/components/project-bar.js";
 
@@ -19,6 +20,7 @@ on("/projects/:pid/specs",           gateRequiringAuth(specs.render));
 on("/projects/:pid/specs/new",       gateRequiringAuth(specNew.render));
 on("/projects/:pid/specs/:sid",      gateRequiringAuth(spec.render));
 on("/projects/:pid/runs/:rid",       gateRequiringAuth(run.render));
+on("/projects/:pid/runs/:rid/preview", gateRequiringAuth(preview.render));
 on("/projects/:pid/steering",        gateRequiringAuth(steering.render));
 
 function gateRequiringAuth(render) {

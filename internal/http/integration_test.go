@@ -1208,6 +1208,209 @@ func getFirstCriterion(t *testing.T, e *testEnv, sid string) map[string]any {
 	return crits[0].(map[string]any)
 }
 
+// TestHarnessRule_PhaseFilter locks in the contract that
+// (a) the harness_rules.phases column scopes a rule to specific PEVC
+//     phases (empty array = "all phases", preserving the old behaviour),
+// (b) the bundle endpoint with ?phase=X only returns rules that match,
+// (c) PATCH can update phases.
+//
+// Without this test the runner could regress to seeing every rule in
+// every phase, which means a validate-only judge_prompt would bleed
+// into the planner's prompt and the planner would try to emit verdicts.
+func TestHarnessRule_PhaseFilter(t *testing.T) {
+	e := setupTestEnv(t)
+	pid := e.pid
+
+	// Three rules: one all-phases, one validate-only, one plan-only.
+	var allRule, validateRule, planRule map[string]any
+	e.c.do("POST", "/api/projects/"+pid+"/harness-rules", e.c.token,
+		map[string]any{"kind": "agents_md", "name": "all", "body": "every phase"},
+		&allRule, http.StatusCreated)
+	e.c.do("POST", "/api/projects/"+pid+"/harness-rules", e.c.token,
+		map[string]any{"kind": "judge_prompt", "name": "v", "body": "validate text",
+			"phases": []string{"validate"}},
+		&validateRule, http.StatusCreated)
+	e.c.do("POST", "/api/projects/"+pid+"/harness-rules", e.c.token,
+		map[string]any{"kind": "agents_md", "name": "p", "body": "plan text",
+			"phases": []string{"plan"}},
+		&planRule, http.StatusCreated)
+
+	// Build a spec + run so the bundle endpoint has something to point at.
+	var spec map[string]any
+	e.c.do("POST", "/api/projects/"+pid+"/specs", e.c.token,
+		map[string]any{"title": "phase scope test", "intent": "x"},
+		&spec, http.StatusCreated)
+	sid := spec["id"].(string)
+	e.c.do("POST", "/api/projects/"+pid+"/specs/"+sid+"/criteria", e.c.token,
+		map[string]any{"text": "ok", "sensor_kind": "judge"}, nil, http.StatusOK)
+	e.c.do("POST", "/api/projects/"+pid+"/specs/"+sid+"/approve", e.c.token, nil, nil, http.StatusOK)
+	var run map[string]any
+	e.c.do("POST", "/api/projects/"+pid+"/specs/"+sid+"/runs", e.c.token,
+		map[string]any{}, &run, http.StatusCreated)
+	rid := run["id"].(string)
+
+	// Helper: count the rule names returned for a given phase filter.
+	bundleNames := func(phase string) []string {
+		var b map[string]any
+		path := "/api/projects/" + pid + "/runs/" + rid + "/bundle"
+		if phase != "" {
+			path += "?phase=" + phase
+		}
+		e.c.do("GET", path, e.apiKey, nil, &b, http.StatusOK)
+		raws, _ := b["harness_rules"].([]any)
+		out := make([]string, 0, len(raws))
+		for _, r := range raws {
+			out = append(out, r.(map[string]any)["name"].(string))
+		}
+		return out
+	}
+
+	// No filter — every enabled rule comes back.
+	all := bundleNames("")
+	if len(all) != 3 {
+		t.Fatalf("no-filter bundle: got %d rules, want 3 (%v)", len(all), all)
+	}
+
+	// phase=plan — all-rule + plan-only. Validate-only must NOT show up.
+	planNames := bundleNames("plan")
+	hasV := false
+	for _, n := range planNames {
+		if n == "v" {
+			hasV = true
+		}
+	}
+	if hasV {
+		t.Errorf("validate-only rule leaked into the plan bundle: %v", planNames)
+	}
+	if len(planNames) != 2 {
+		t.Errorf("plan-bundle rule count: got %d want 2 (%v)", len(planNames), planNames)
+	}
+
+	// phase=validate — all-rule + validate-only.
+	valNames := bundleNames("validate")
+	hasP := false
+	for _, n := range valNames {
+		if n == "p" {
+			hasP = true
+		}
+	}
+	if hasP {
+		t.Errorf("plan-only rule leaked into the validate bundle: %v", valNames)
+	}
+
+	// PATCH the planRule to validate-only — phase filter response must update.
+	prID := planRule["id"].(string)
+	e.c.do("PATCH", "/api/projects/"+pid+"/harness-rules/"+prID, e.c.token,
+		map[string]any{"phases": []string{"validate"}}, nil, http.StatusOK)
+	planNames2 := bundleNames("plan")
+	for _, n := range planNames2 {
+		if n == "p" {
+			t.Errorf("rule should have moved off the plan phase after PATCH; still in: %v", planNames2)
+		}
+	}
+
+	// Invalid phase string is rejected at create time.
+	res := e.c.raw("POST", "/api/projects/"+pid+"/harness-rules", e.c.token,
+		map[string]any{"kind": "agents_md", "name": "bad", "body": "x",
+			"phases": []string{"not-a-phase"}})
+	if res.StatusCode != http.StatusBadRequest {
+		body, _ := io.ReadAll(res.Body)
+		res.Body.Close()
+		t.Errorf("invalid phase should be 400; got %d: %s", res.StatusCode, body)
+	}
+	res.Body.Close()
+}
+
+// TestRunPreview_LabeledSegments exercises the new prompt-preview
+// endpoint. Asserts that:
+//   - GET /preview returns a structured payload with role + system +
+//     user-segment list (matches what the UI consumes)
+//   - the spec intent appears in a "spec" segment with an edit URL
+//     pointing at the spec page
+//   - a harness rule shows up as its own segment with source_id and
+//     the steering edit URL
+//   - phase=validate vs phase=plan returns different rules (proves the
+//     bundle phase filter is wired into the preview)
+func TestRunPreview_LabeledSegments(t *testing.T) {
+	e := setupTestEnv(t)
+	pid := e.pid
+
+	// Plan-only rule; should NOT appear when previewing the validate phase.
+	var planRule map[string]any
+	e.c.do("POST", "/api/projects/"+pid+"/harness-rules", e.c.token,
+		map[string]any{"kind": "agents_md", "name": "plan-rule",
+			"body": "PLAN-ONLY", "phases": []string{"plan"}},
+		&planRule, http.StatusCreated)
+
+	var spec map[string]any
+	e.c.do("POST", "/api/projects/"+pid+"/specs", e.c.token,
+		map[string]any{"title": "preview test", "intent": "make the thing work"},
+		&spec, http.StatusCreated)
+	sid := spec["id"].(string)
+	e.c.do("POST", "/api/projects/"+pid+"/specs/"+sid+"/criteria", e.c.token,
+		map[string]any{"text": "thing works", "sensor_kind": "judge"}, nil, http.StatusOK)
+	e.c.do("POST", "/api/projects/"+pid+"/specs/"+sid+"/approve", e.c.token, nil, nil, http.StatusOK)
+	var run map[string]any
+	e.c.do("POST", "/api/projects/"+pid+"/specs/"+sid+"/runs", e.c.token,
+		map[string]any{}, &run, http.StatusCreated)
+	rid := run["id"].(string)
+
+	// preview?phase=plan must include the plan-only rule + the spec.
+	var pv map[string]any
+	e.c.do("GET", "/api/projects/"+pid+"/runs/"+rid+"/preview?phase=plan", e.c.token, nil, &pv, http.StatusOK)
+	if pv["role"] != "planner" {
+		t.Errorf("plan phase role: got %v want planner", pv["role"])
+	}
+	user, _ := pv["user"].([]any)
+	hasSpec, hasRule, hasIntent := false, false, false
+	for _, raw := range user {
+		seg := raw.(map[string]any)
+		if seg["source"] == "spec" {
+			hasSpec = true
+			if !strings.Contains(seg["content"].(string), "make the thing work") {
+				t.Errorf("spec segment didn't include the intent text: %v", seg["content"])
+			}
+			if !strings.Contains(seg["edit_url"].(string), "/specs/"+sid) {
+				t.Errorf("spec segment edit_url didn't link to the spec page: %v", seg["edit_url"])
+			}
+			hasIntent = true
+		}
+		if seg["source"] == "harness_rule" && seg["source_id"] == planRule["id"] {
+			hasRule = true
+			if !strings.Contains(seg["edit_url"].(string), "/steering") {
+				t.Errorf("harness_rule edit_url should point to /steering: %v", seg["edit_url"])
+			}
+		}
+	}
+	if !hasSpec || !hasIntent {
+		t.Errorf("missing 'spec' segment in plan-phase preview: %v", user)
+	}
+	if !hasRule {
+		t.Errorf("plan-only rule should appear in plan-phase preview: %v", user)
+	}
+
+	// preview?phase=validate must EXCLUDE the plan-only rule.
+	var pv2 map[string]any
+	e.c.do("GET", "/api/projects/"+pid+"/runs/"+rid+"/preview?phase=validate", e.c.token, nil, &pv2, http.StatusOK)
+	if pv2["role"] != "validator" {
+		t.Errorf("validate phase role: got %v want validator", pv2["role"])
+	}
+	user2, _ := pv2["user"].([]any)
+	for _, raw := range user2 {
+		seg := raw.(map[string]any)
+		if seg["source"] == "harness_rule" && seg["source_id"] == planRule["id"] {
+			t.Errorf("plan-only rule leaked into validate-phase preview")
+		}
+	}
+
+	// Invalid phase rejected.
+	res := e.c.raw("GET", "/api/projects/"+pid+"/runs/"+rid+"/preview?phase=banana", e.c.token, nil)
+	if res.StatusCode != http.StatusBadRequest {
+		t.Errorf("invalid phase should be 400; got %d", res.StatusCode)
+	}
+	res.Body.Close()
+}
+
 // TestProjectBar_SummaryAndPrefs locks in the API contract the new
 // project bar consumes. The bar fetches /api/projects/bar on initial
 // render to get all projects + each one's prefs + summary in a single

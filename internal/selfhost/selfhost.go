@@ -170,7 +170,7 @@ func seedRules(ctx context.Context, pool *pgxpool.Pool, st *store.Store, project
 			skipped++
 			continue
 		}
-		if _, err := st.CreateRule(ctx, projectID, nil, r.Kind, r.Name, r.Body); err != nil {
+		if _, err := st.CreateRule(ctx, projectID, nil, r.Kind, r.Name, r.Body, r.Phases); err != nil {
 			return added, skipped, fmt.Errorf("create rule %q: %w", r.Name, err)
 		}
 		added++

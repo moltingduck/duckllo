@@ -82,6 +82,7 @@ func (s *Server) routes() http.Handler {
 			r.Route("/runs/{runID}", func(r chi.Router) {
 				r.Get("/", s.handleGetRun)
 				r.Get("/bundle", s.handleBundle)
+				r.Get("/preview", s.handleRunPreview)
 				r.Post("/abort", s.handleAbortRun)
 				r.Post("/complete", s.handleCompleteRun)
 				r.Post("/heartbeat", s.handleHeartbeat)

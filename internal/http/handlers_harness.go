@@ -2,6 +2,7 @@ package http
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 
 	"github.com/google/uuid"
@@ -48,10 +49,11 @@ func (s *Server) handleCreateTopology(w http.ResponseWriter, r *http.Request) {
 }
 
 type createRuleReq struct {
-	TopologyID string `json:"topology_id,omitempty"`
-	Kind       string `json:"kind"`
-	Name       string `json:"name"`
-	Body       string `json:"body"`
+	TopologyID string   `json:"topology_id,omitempty"`
+	Kind       string   `json:"kind"`
+	Name       string   `json:"name"`
+	Body       string   `json:"body"`
+	Phases     []string `json:"phases,omitempty"`
 }
 
 func (s *Server) handleListRules(w http.ResponseWriter, r *http.Request) {
@@ -97,7 +99,11 @@ func (s *Server) handleCreateRule(w http.ResponseWriter, r *http.Request) {
 		}
 		topID = &parsed
 	}
-	rule, err := store.New(s.pool).CreateRule(r.Context(), p.ID, topID, req.Kind, req.Name, req.Body)
+	if err := validatePhases(req.Phases); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	rule, err := store.New(s.pool).CreateRule(r.Context(), p.ID, topID, req.Kind, req.Name, req.Body, req.Phases)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -106,8 +112,24 @@ func (s *Server) handleCreateRule(w http.ResponseWriter, r *http.Request) {
 }
 
 type patchRuleReq struct {
-	Body    *string `json:"body,omitempty"`
-	Enabled *bool   `json:"enabled,omitempty"`
+	Body    *string   `json:"body,omitempty"`
+	Enabled *bool     `json:"enabled,omitempty"`
+	Phases  *[]string `json:"phases,omitempty"`
+}
+
+// validatePhases enforces the canonical PEVC phase set on writes.
+// Empty slice (or nil) is fine — that's the "applies to all phases"
+// default. Anything else has to be one of the four real phase names
+// the runner emits, otherwise the rule would be silently dead.
+func validatePhases(ph []string) error {
+	for _, p := range ph {
+		switch p {
+		case "plan", "execute", "validate", "correct":
+		default:
+			return errors.New("phases entries must be one of: plan, execute, validate, correct (got " + p + ")")
+		}
+	}
+	return nil
 }
 
 func (s *Server) handlePatchRule(w http.ResponseWriter, r *http.Request) {
@@ -125,7 +147,13 @@ func (s *Server) handlePatchRule(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	rule, err := store.New(s.pool).UpdateRule(r.Context(), id, req.Body, req.Enabled)
+	if req.Phases != nil {
+		if err := validatePhases(*req.Phases); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+	}
+	rule, err := store.New(s.pool).UpdateRule(r.Context(), id, req.Body, req.Enabled, req.Phases)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return

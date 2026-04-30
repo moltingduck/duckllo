@@ -27,6 +27,12 @@ type HarnessRule struct {
 	Name       string     `json:"name"`
 	Body       string     `json:"body"`
 	Enabled    bool       `json:"enabled"`
+	// Phases scopes which PEVC phases inject this rule into the prompt.
+	// Empty slice means "all phases" (the default — preserves prior
+	// behaviour for rows from before migration 009). Concrete values
+	// are 'plan' | 'execute' | 'validate' | 'correct'; the bundle
+	// endpoint filters by current phase before assembling.
+	Phases     []string   `json:"phases"`
 	CreatedAt  time.Time  `json:"created_at"`
 	UpdatedAt  time.Time  `json:"updated_at"`
 }
@@ -66,14 +72,32 @@ func (s *Store) CreateTopology(ctx context.Context, projectID uuid.UUID, name, d
 	return &t, nil
 }
 
+// ListEnabledRules returns every enabled rule for the project. Used by
+// the steering UI which renders the full table; the bundle endpoint
+// instead uses ListEnabledRulesForPhase below to filter by phase.
 func (s *Store) ListEnabledRules(ctx context.Context, projectID uuid.UUID, topologyID *uuid.UUID) ([]HarnessRule, error) {
+	return s.listRules(ctx, projectID, topologyID, "")
+}
+
+// ListEnabledRulesForPhase returns rules that should be injected into
+// the prompt for `phase`. A rule with empty phases targets every phase
+// (the default for the seeded selfhost rules); a rule with a non-empty
+// phases array only matches when the current phase is listed. The
+// runner orchestrator calls this so a "judge_prompt" rule, for
+// example, only reaches the validate phase, not the plan phase.
+func (s *Store) ListEnabledRulesForPhase(ctx context.Context, projectID uuid.UUID, topologyID *uuid.UUID, phase string) ([]HarnessRule, error) {
+	return s.listRules(ctx, projectID, topologyID, phase)
+}
+
+func (s *Store) listRules(ctx context.Context, projectID uuid.UUID, topologyID *uuid.UUID, phase string) ([]HarnessRule, error) {
 	rows, err := s.Pool.Query(ctx, `
-		SELECT id, project_id, topology_id, kind, name, body, enabled, created_at, updated_at
+		SELECT id, project_id, topology_id, kind, name, body, enabled, phases, created_at, updated_at
 		FROM harness_rules
 		WHERE project_id = $1 AND enabled = TRUE
 		  AND (topology_id IS NULL OR $2::uuid IS NULL OR topology_id = $2)
+		  AND ($3 = '' OR phases = '{}' OR $3 = ANY(phases))
 		ORDER BY kind, name
-	`, projectID, topologyID)
+	`, projectID, topologyID, phase)
 	if err != nil {
 		return nil, err
 	}
@@ -81,7 +105,7 @@ func (s *Store) ListEnabledRules(ctx context.Context, projectID uuid.UUID, topol
 	out := []HarnessRule{}
 	for rows.Next() {
 		var r HarnessRule
-		if err := rows.Scan(&r.ID, &r.ProjectID, &r.TopologyID, &r.Kind, &r.Name, &r.Body, &r.Enabled, &r.CreatedAt, &r.UpdatedAt); err != nil {
+		if err := rows.Scan(&r.ID, &r.ProjectID, &r.TopologyID, &r.Kind, &r.Name, &r.Body, &r.Enabled, &r.Phases, &r.CreatedAt, &r.UpdatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, r)
@@ -89,14 +113,17 @@ func (s *Store) ListEnabledRules(ctx context.Context, projectID uuid.UUID, topol
 	return out, rows.Err()
 }
 
-func (s *Store) CreateRule(ctx context.Context, projectID uuid.UUID, topologyID *uuid.UUID, kind, name, body string) (*HarnessRule, error) {
+func (s *Store) CreateRule(ctx context.Context, projectID uuid.UUID, topologyID *uuid.UUID, kind, name, body string, phases []string) (*HarnessRule, error) {
+	if phases == nil {
+		phases = []string{}
+	}
 	var r HarnessRule
 	err := s.Pool.QueryRow(ctx, `
-		INSERT INTO harness_rules (project_id, topology_id, kind, name, body)
-		VALUES ($1, $2, $3, $4, $5)
-		RETURNING id, project_id, topology_id, kind, name, body, enabled, created_at, updated_at
-	`, projectID, topologyID, kind, name, body).Scan(
-		&r.ID, &r.ProjectID, &r.TopologyID, &r.Kind, &r.Name, &r.Body, &r.Enabled, &r.CreatedAt, &r.UpdatedAt,
+		INSERT INTO harness_rules (project_id, topology_id, kind, name, body, phases)
+		VALUES ($1, $2, $3, $4, $5, $6)
+		RETURNING id, project_id, topology_id, kind, name, body, enabled, phases, created_at, updated_at
+	`, projectID, topologyID, kind, name, body, phases).Scan(
+		&r.ID, &r.ProjectID, &r.TopologyID, &r.Kind, &r.Name, &r.Body, &r.Enabled, &r.Phases, &r.CreatedAt, &r.UpdatedAt,
 	)
 	if err != nil {
 		return nil, err
@@ -104,16 +131,28 @@ func (s *Store) CreateRule(ctx context.Context, projectID uuid.UUID, topologyID 
 	return &r, nil
 }
 
-func (s *Store) UpdateRule(ctx context.Context, id uuid.UUID, body *string, enabled *bool) (*HarnessRule, error) {
+func (s *Store) UpdateRule(ctx context.Context, id uuid.UUID, body *string, enabled *bool, phases *[]string) (*HarnessRule, error) {
+	var phasesArg interface{}
+	if phases != nil {
+		// Normalize nil-inside-pointer to empty array — DEFAULT '{}'
+		// applies on insert, but UPDATE needs an explicit value.
+		v := *phases
+		if v == nil {
+			v = []string{}
+		}
+		phasesArg = v
+	}
 	var r HarnessRule
 	err := s.Pool.QueryRow(ctx, `
 		UPDATE harness_rules SET
 			body    = COALESCE($2, body),
 			enabled = COALESCE($3, enabled),
+			phases  = COALESCE($4::text[], phases),
 			updated_at = NOW()
 		WHERE id = $1
-		RETURNING id, project_id, topology_id, kind, name, body, enabled, created_at, updated_at
-	`, id, body, enabled).Scan(&r.ID, &r.ProjectID, &r.TopologyID, &r.Kind, &r.Name, &r.Body, &r.Enabled, &r.CreatedAt, &r.UpdatedAt)
+		RETURNING id, project_id, topology_id, kind, name, body, enabled, phases, created_at, updated_at
+	`, id, body, enabled, phasesArg).Scan(
+		&r.ID, &r.ProjectID, &r.TopologyID, &r.Kind, &r.Name, &r.Body, &r.Enabled, &r.Phases, &r.CreatedAt, &r.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}

@@ -217,6 +217,7 @@ type HarnessRule struct {
 	Name       string     `json:"name"`
 	Body       string     `json:"body"`
 	Enabled    bool       `json:"enabled"`
+	Phases     []string   `json:"phases,omitempty"`
 }
 
 type Bundle struct {
@@ -258,9 +259,20 @@ func (c *Client) Advance(ctx context.Context, runID uuid.UUID, req AdvanceReques
 	return c.do(ctx, "POST", c.projectPath(fmt.Sprintf("/runs/%s/advance", runID)), req, nil)
 }
 
-func (c *Client) Bundle(ctx context.Context, runID uuid.UUID) (*Bundle, error) {
+// Bundle fetches all the context the orchestrator needs for one
+// phase of one run. `phase` is optional — leave it empty to get every
+// enabled harness rule (legacy behaviour); pass the current phase to
+// get only the rules whose Phases list includes it. Filtering at the
+// server side keeps the runner's prompt lean and means a phase-locked
+// rule (e.g. a validate-only judge_prompt) never bleeds into other
+// phases by accident.
+func (c *Client) Bundle(ctx context.Context, runID uuid.UUID, phase string) (*Bundle, error) {
 	var b Bundle
-	err := c.do(ctx, "GET", c.projectPath(fmt.Sprintf("/runs/%s/bundle", runID)), nil, &b)
+	path := fmt.Sprintf("/runs/%s/bundle", runID)
+	if phase != "" {
+		path += "?phase=" + phase
+	}
+	err := c.do(ctx, "GET", c.projectPath(path), nil, &b)
 	if err != nil {
 		return nil, err
 	}

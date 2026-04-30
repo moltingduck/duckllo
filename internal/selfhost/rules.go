@@ -8,13 +8,15 @@
 package selfhost
 
 // SeedRule is the codified form of one harness rule. The selfhost
-// command POSTs each as `kind`+`name`+`body` to the duckllo
+// command POSTs each as `kind`+`name`+`body`+`phases` to the duckllo
 // `harness_rules` table (skipping rules whose name already exists, so
-// re-runs don't duplicate).
+// re-runs don't duplicate). Phases is optional — leaving it nil/empty
+// is the default "applies to every PEVC phase" behaviour.
 type SeedRule struct {
-	Kind string
-	Name string
-	Body string
+	Kind   string
+	Name   string
+	Body   string
+	Phases []string // nil/empty = apply to every phase
 }
 
 // SelfHostRules is the canonical list. Order matches how a developer
@@ -134,6 +136,7 @@ single fenced JSON block with shape
   {"verdicts":[{"criterion_id":"...","status":"pass|fail|warn","summary":"..."}]}
 and nothing else. Ambient prose breaks the parser; missing fields
 silently demote the run to status=warn.`,
+		Phases: []string{"validate"},
 	},
 	{
 		Kind: "judge_prompt",
@@ -148,6 +151,7 @@ were created when they weren't (see commit 28ae6eb).
 If the diff is empty or doesn't contain the changes the criterion
 demands, the verdict is fail (or warn, if you genuinely can't tell
 from the diff alone).`,
+		Phases: []string{"validate"},
 	},
 	{
 		Kind: "agents_md",
