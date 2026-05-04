@@ -21,6 +21,7 @@ import (
 //	scenario:        array of {action, ...} objects
 //	  action=navigate    url:    relative or absolute
 //	  action=click       selector
+//	  action=hover       selector  (mouse-over for tooltips/popups)
 //	  action=type        selector, text
 //	  action=wait        selector  (waits for visible)
 //	  action=sleep       sleep_ms
@@ -169,6 +170,19 @@ func buildTask(a gifAction, base string) (chromedp.Tasks, error) {
 		return chromedp.Tasks{chromedp.Navigate(target)}, nil
 	case "click":
 		return chromedp.Tasks{chromedp.Click(a.Selector, chromedp.ByQuery)}, nil
+	case "hover":
+		// chromedp doesn't expose a native Hover() — the closest stable
+		// path is dispatching a real mouseover via JS so listeners fire.
+		// pointer-events:none elements (like our hover card) ignore JS
+		// events anyway, so this is the right level: drive the *thing*
+		// the user mouses, not the popup it produces.
+		js := `(function(s){var el=document.querySelector(s);` +
+			`if(!el) throw new Error('selector not found: '+s);` +
+			`var r=el.getBoundingClientRect();` +
+			`['mouseover','mouseenter','mousemove'].forEach(function(e){` +
+			`el.dispatchEvent(new MouseEvent(e,{bubbles:true,cancelable:true,clientX:r.left+r.width/2,clientY:r.top+r.height/2}));` +
+			`});})(` + jsString(a.Selector) + `)`
+		return chromedp.Tasks{chromedp.Evaluate(js, nil)}, nil
 	case "type":
 		return chromedp.Tasks{chromedp.SendKeys(a.Selector, a.Text, chromedp.ByQuery)}, nil
 	case "wait":
@@ -181,6 +195,14 @@ func buildTask(a gifAction, base string) (chromedp.Tasks, error) {
 		return chromedp.Tasks{chromedp.Sleep(d)}, nil
 	}
 	return nil, fmt.Errorf("unknown action %q", a.Action)
+}
+
+// jsString quotes a string for safe embedding in a JS evaluate
+// expression. Mirrors strconv.Quote's escapes for the characters that
+// matter in CSS selectors / DOM strings.
+func jsString(s string) string {
+	r := strings.NewReplacer(`\`, `\\`, `'`, `\'`, "\n", `\n`, "\r", `\r`)
+	return "'" + r.Replace(s) + "'"
 }
 
 func getStr(m map[string]any, k string) string {

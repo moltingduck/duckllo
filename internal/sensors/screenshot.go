@@ -12,10 +12,14 @@ import (
 // ScreenshotSensor drives a headless Chrome via CDP to capture a PNG of
 // the dev server's UI. sensor_spec keys the sensor accepts:
 //
-//	url       string        absolute URL or path appended to env.DevURL
-//	selector  string        optional CSS selector to wait for + screenshot
-//	viewport  {w:int,h:int} optional, default 1280x800
-//	full_page bool          if true, capture full scrollable page
+//	url             string        absolute URL or path appended to env.DevURL
+//	selector        string        optional CSS selector to wait for + screenshot
+//	hover_selector  string        optional — fire mouseover on this element
+//	                              before the capture, so a tooltip / popover
+//	                              that needs hover to appear is in the shot
+//	hover_delay_ms  int           wait this long after the hover (default 250ms)
+//	viewport        {w:int,h:int} optional, default 1280x800
+//	full_page       bool          if true, capture full scrollable page
 //
 // Phase 1 produces the screenshot only; baseline comparison + visual diff
 // land alongside the annotator (a follow-up commit). Status is reported
@@ -61,6 +65,25 @@ func (s *ScreenshotSensor) Run(ctx context.Context, c Criterion, env Env) (*Resu
 	tasks := chromedp.Tasks{chromedp.Navigate(url)}
 	if selector != "" {
 		tasks = append(tasks, chromedp.WaitVisible(selector, chromedp.ByQuery))
+	}
+	// hover_selector: dispatch mouseover/mouseenter/mousemove on the
+	// target so the popover or tooltip that depends on hover is in the
+	// captured frame. JS dispatch is more reliable than CDP mouse-move
+	// because pointer-events:none on the popover would otherwise rely
+	// on real cursor coordinates that don't survive headless mode.
+	if hoverSel, ok := c.SensorSpec["hover_selector"].(string); ok && hoverSel != "" {
+		tasks = append(tasks, chromedp.WaitVisible(hoverSel, chromedp.ByQuery))
+		tasks = append(tasks, chromedp.Evaluate(`(function(s){var el=document.querySelector(s);`+
+			`if(!el) throw new Error('hover_selector not found: '+s);`+
+			`var r=el.getBoundingClientRect();`+
+			`['mouseover','mouseenter','mousemove'].forEach(function(e){`+
+			`el.dispatchEvent(new MouseEvent(e,{bubbles:true,cancelable:true,clientX:r.left+r.width/2,clientY:r.top+r.height/2}));`+
+			`});})(`+jsString(hoverSel)+`)`, nil))
+		delay := 250 * time.Millisecond
+		if v, ok := numAsInt(c.SensorSpec["hover_delay_ms"]); ok && v > 0 {
+			delay = time.Duration(v) * time.Millisecond
+		}
+		tasks = append(tasks, chromedp.Sleep(delay))
 	}
 	if fullPage {
 		tasks = append(tasks, chromedp.FullScreenshot(&pngBytes, 90))

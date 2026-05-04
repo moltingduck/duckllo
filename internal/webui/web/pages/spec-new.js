@@ -41,16 +41,96 @@ export async function render(mount, params) {
   function renderCriteria() {
     criteriaList.innerHTML = "";
     criteria.forEach((c, i) => {
-      const li = el("li", {}, [
+      // Header row: kind pill + text + remove + (for sensor kinds with
+      // a useful sensor_spec) a small "configure" toggle that reveals
+      // a JSON editor below.
+      const removeBtn = el("button", { class: "danger" }, "remove");
+      const head = el("div", { class: "row", style: "gap:8px;align-items:flex-start" }, [
         el("span", { class: "pill mono" }, c.sensor_kind),
-        el("span", {}, c.text),
-        el("button", { class: "danger" }, "remove"),
+        el("span", { style: "flex:1" }, c.text),
       ]);
-      li.querySelector("button").addEventListener("click", () => {
+      const li = el("li", {}, [head]);
+
+      // sensor_spec editor — only meaningful for sensors that take one.
+      if (sensorKindNeedsSpec(c.sensor_kind)) {
+        const toggle = el("button", { class: "secondary", type: "button", title: "Edit sensor_spec — selectors, viewport, scenario, hover_selector, etc." },
+          c._specOpen ? "− spec" : "+ spec");
+        head.appendChild(toggle);
+        head.appendChild(removeBtn);
+
+        const editor = el("textarea", {
+          rows: "6",
+          spellcheck: "false",
+          style: "font-family:var(--mono);font-size:11px;margin-top:6px;display:" + (c._specOpen ? "block" : "none"),
+          placeholder: defaultSpecHint(c.sensor_kind),
+        });
+        editor.value = c.sensor_spec ? JSON.stringify(c.sensor_spec, null, 2) : "";
+        editor.addEventListener("blur", () => {
+          const raw = editor.value.trim();
+          if (raw === "") { delete c.sensor_spec; return; }
+          try {
+            c.sensor_spec = JSON.parse(raw);
+          } catch (err) {
+            toast("Invalid JSON in sensor_spec: " + err.message, "error");
+          }
+        });
+        toggle.addEventListener("click", () => {
+          c._specOpen = !c._specOpen;
+          editor.style.display = c._specOpen ? "block" : "none";
+          toggle.textContent = c._specOpen ? "− spec" : "+ spec";
+        });
+        li.appendChild(editor);
+      } else {
+        head.appendChild(removeBtn);
+      }
+
+      removeBtn.addEventListener("click", () => {
         criteria.splice(i, 1); renderCriteria();
       });
       criteriaList.appendChild(li);
     });
+  }
+
+  // Which sensor kinds expose enough configuration knobs to be worth
+  // an inline editor. Lint / unit_test / build / manual / judge run
+  // off the criterion text alone.
+  function sensorKindNeedsSpec(kind) {
+    return kind === "screenshot" || kind === "gif" || kind === "visual_diff";
+  }
+
+  // Concrete starter JSON the user can replace — same field set the Go
+  // sensor consumes, so paste-and-tweak is the fast path.
+  function defaultSpecHint(kind) {
+    if (kind === "gif") {
+      return JSON.stringify({
+        viewport: { w: 1280, h: 800 },
+        frame_delay_ms: 250,
+        scenario: [
+          { action: "navigate", url: "/" },
+          { action: "wait", selector: ".some-element" },
+          { action: "hover", selector: ".some-element" },
+          { action: "sleep", sleep_ms: 600 },
+        ],
+      }, null, 2);
+    }
+    if (kind === "screenshot") {
+      return JSON.stringify({
+        url: "/",
+        selector: "",
+        hover_selector: "",
+        viewport: { w: 1280, h: 800 },
+        full_page: false,
+      }, null, 2);
+    }
+    if (kind === "visual_diff") {
+      return JSON.stringify({
+        url: "/",
+        baseline_url: "/api/uploads/<id>.png",
+        tolerance: 16,
+        diff_threshold: 0.5,
+      }, null, 2);
+    }
+    return "";
   }
 
   const newCritText = el("input", { type: "text", placeholder: "User can toggle theme from header" });
@@ -208,7 +288,9 @@ export async function render(mount, params) {
       // Fold the criteria onto the spec via PATCH so we keep one network roundtrip.
       if (criteria.length > 0) {
         await api(`/api/projects/${params.pid}/specs/${sp.id}`, { method: "PATCH",
-          body: { acceptance_criteria: criteria } });
+          // Strip UI-only fields like _specOpen so they don't bloat
+          // the row and confuse downstream consumers reading the JSON.
+          body: { acceptance_criteria: criteria.map(({_specOpen, ...rest}) => rest) } });
       }
       toast("Created " + sp.title);
       go(`/projects/${params.pid}/specs/${sp.id}`);
