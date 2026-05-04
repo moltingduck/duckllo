@@ -1411,6 +1411,36 @@ func TestRunPreview_LabeledSegments(t *testing.T) {
 	res.Body.Close()
 }
 
+// TestListProjects_AfterLanguageMigration is a tiny canary: any
+// project SELECT that forgot to include the language column would
+// fail with "number of field descriptions must equal number of
+// destinations" when the row is scanned. Hit GET /api/projects (which
+// uses ListProjectsForUser) plus GET /api/projects/{pid} (ProjectByID)
+// after a successful PATCH so we know both paths happily round-trip
+// the new column.
+func TestListProjects_AfterLanguageMigration(t *testing.T) {
+	e := setupTestEnv(t)
+	pid := e.pid
+
+	// Touch language so we exercise the COALESCE branch on UpdateProject too.
+	e.c.do("PATCH", "/api/projects/"+pid, e.c.token,
+		map[string]any{"language": "zh-TW"}, nil, http.StatusOK)
+
+	var list []map[string]any
+	e.c.do("GET", "/api/projects", e.c.token, nil, &list, http.StatusOK)
+	if len(list) == 0 {
+		t.Fatalf("expected at least one project")
+	}
+	if list[0]["language"] != "zh-TW" {
+		t.Errorf("language not in list response: %v", list[0])
+	}
+	var single map[string]any
+	e.c.do("GET", "/api/projects/"+pid, e.c.token, nil, &single, http.StatusOK)
+	if single["language"] != "zh-TW" {
+		t.Errorf("language not in single-project GET: %v", single)
+	}
+}
+
 // TestProjectLanguage_PlumbedThroughBundleAndSuggest covers the
 // agent-language signal end to end:
 //   - PATCH /projects accepts a language and rejects garbage

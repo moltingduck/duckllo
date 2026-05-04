@@ -82,7 +82,7 @@ func (s *Store) ProjectByID(ctx context.Context, id uuid.UUID) (*models.Project,
 
 func (s *Store) ListProjectsForUser(ctx context.Context, userID uuid.UUID) ([]models.Project, error) {
 	rows, err := s.Pool.Query(ctx, `
-		SELECT p.id, p.name, COALESCE(p.description,''), p.owner_id, p.git_repo_url, p.settings, p.created_at, p.updated_at
+		SELECT p.id, p.name, COALESCE(p.description,''), p.owner_id, p.git_repo_url, p.settings, p.language, p.created_at, p.updated_at
 		FROM projects p
 		JOIN project_members m ON m.project_id = p.id
 		WHERE m.user_id = $1
