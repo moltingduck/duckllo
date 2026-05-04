@@ -337,7 +337,31 @@ func (o *Orchestrator) postWorkspaceChanges(ctx context.Context, runID, iteratio
 		return
 	}
 
-	diffOut, err := o.sandbox.Workspace.Exec(ctx, []string{"git", "diff", "--no-color"})
+	// Mark every untracked file as intent-to-add so the subsequent
+	// `git diff` shows them as new-file additions. Without this step
+	// the diff is silently incomplete: a freshly-created file lives
+	// only as a `??` entry in `git status --porcelain` and the judge
+	// cannot reason about content it never sees. `git add -N` is a
+	// content-less mark — it doesn't stage data, just visibility —
+	// so subsequent iterations and a real `git add` later still
+	// behave sensibly. Best-effort: ignore failures (e.g. on the
+	// initial commit when HEAD doesn't exist yet).
+	for _, line := range strings.Split(statusStr, "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "??") {
+			continue
+		}
+		path := strings.TrimSpace(strings.TrimPrefix(line, "??"))
+		if path == "" {
+			continue
+		}
+		_, _ = o.sandbox.Workspace.Exec(ctx, []string{"git", "add", "-N", "--", path})
+	}
+
+	// `HEAD` so the diff covers staged + unstaged + intent-to-add.
+	// The plain `git diff` form skips staged content, which silently
+	// hides whatever a future runner/agent might choose to stage.
+	diffOut, err := o.sandbox.Workspace.Exec(ctx, []string{"git", "diff", "--no-color", "HEAD"})
 	if err != nil {
 		log.Printf("workspace_changes: git diff failed: %v", err)
 		return
