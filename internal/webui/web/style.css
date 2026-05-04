@@ -88,9 +88,13 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   position: relative; padding: 3px 8px;
   display: flex; flex-direction: column; justify-content: center;
   background: rgba(255,255,255,0.02); border: 1px solid var(--border); border-radius: 4px;
-  cursor: grab; user-select: none; min-width: 0;
+  cursor: pointer; user-select: none; min-width: 0;
   font-size: 12px;
 }
+.project-bar__tile:hover {
+  background: rgba(255,255,255,0.06); border-color: var(--accent-dim);
+}
+.project-bar__tile.dragging { cursor: grabbing; }
 .project-bar__tile.pinned { border-color: var(--accent-dim); }
 .project-bar__tile.archived { opacity: 0.5; }
 .project-bar__tile.dragging { opacity: 0.4; }

@@ -113,11 +113,25 @@ function renderTile(t, isOverflowItem) {
     class: "project-bar__tile" + (t.pref.pinned ? " pinned" : "") + (t.pref.archived ? " archived" : ""),
     draggable: !isOverflowItem ? "true" : null,
     "data-pid": pid,
+    title: "Open " + t.name,
+  });
+
+  // Whole tile is the click target — name, badges, empty space all
+  // navigate to the project's specs page. Drag still wins over click
+  // because the browser fires `dragend` not `click` after a real drag.
+  // Pin / archive button clicks below stop propagation so they don't
+  // double-fire navigation when toggling state.
+  tile.addEventListener("click", (e) => {
+    // Bail if the click was on an interactive child (pin/archive
+    // button) — they handle their own action.
+    if (e.target.closest("button")) return;
+    closeHoverCard();
+    location.hash = `#/projects/${pid}/specs`;
   });
 
   // Header row: name + pin + archive controls.
   const head = el("div", { class: "project-bar__head" }, [
-    el("a", { class: "project-bar__name", href: `#/projects/${pid}/specs` }, t.name),
+    el("span", { class: "project-bar__name" }, t.name),
   ]);
   const pinBtn = el("button", {
     class: "project-bar__icon",
@@ -125,6 +139,7 @@ function renderTile(t, isOverflowItem) {
   }, t.pref.pinned ? "★" : "☆");
   pinBtn.addEventListener("click", async (e) => {
     e.preventDefault();
+    e.stopPropagation();
     await patch(`/api/projects/${pid}/prefs`, { pinned: !t.pref.pinned });
     t.pref.pinned = !t.pref.pinned;
     sortTiles();
@@ -137,6 +152,7 @@ function renderTile(t, isOverflowItem) {
   }, t.pref.archived ? "↩" : "✕");
   archBtn.addEventListener("click", async (e) => {
     e.preventDefault();
+    e.stopPropagation();
     await patch(`/api/projects/${pid}/prefs`, { archived: !t.pref.archived });
     t.pref.archived = !t.pref.archived;
     paint();
