@@ -80,6 +80,38 @@ func (s *Store) EnqueueRun(ctx context.Context, specID uuid.UUID, planID *uuid.U
 	return &run, tx.Commit(ctx)
 }
 
+// ListVerificationsForSpec joins every verification across all the
+// spec's runs into one list, newest first. The spec page uses this
+// to fold per-criterion results inline so the user doesn't have to
+// hop into a run dashboard to see the captured GIF / screenshot /
+// judge verdict — the spec is "the contract", showing its current
+// satisfaction state right there is the natural place.
+func (s *Store) ListVerificationsForSpec(ctx context.Context, specID uuid.UUID) ([]models.Verification, error) {
+	rows, err := s.Pool.Query(ctx, `
+		SELECT v.id, v.run_id, v.iteration_id, COALESCE(v.criterion_id,''), v.kind, v.class, v.direction,
+		       v.status, v.summary, v.artifact_url, v.details_json, v.created_at
+		FROM verifications v
+		JOIN runs r ON r.id = v.run_id
+		WHERE r.spec_id = $1
+		ORDER BY v.created_at DESC
+	`, specID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []models.Verification{}
+	for rows.Next() {
+		var v models.Verification
+		if err := rows.Scan(&v.ID, &v.RunID, &v.IterationID, &v.CriterionID, &v.Kind,
+			&v.Class, &v.Direction, &v.Status, &v.Summary, &v.ArtifactURL,
+			&v.DetailsJSON, &v.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, v)
+	}
+	return out, rows.Err()
+}
+
 // ListRunsForSpec returns every run belonging to the spec, newest
 // first. The spec dashboard surfaces this as a "Runs" timeline so the
 // user can navigate back to a finished run's dashboard (and its

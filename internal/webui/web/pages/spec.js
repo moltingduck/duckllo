@@ -23,9 +23,25 @@ export async function render(mount, params) {
 }
 
 async function refresh(mount, pid, sid) {
-  const data = await api(`/api/projects/${pid}/specs/${sid}`);
+  // Fetch spec + plans + every verification across every run for the
+  // spec in parallel — the verifications fold under each criterion as
+  // expandable artifact lists. Without the join, a user looking at a
+  // validated spec has no way to see what the validator actually
+  // produced without hopping into a run dashboard.
+  const [data, allVerifs] = await Promise.all([
+    api(`/api/projects/${pid}/specs/${sid}`),
+    api(`/api/projects/${pid}/specs/${sid}/verifications`).catch(() => []),
+  ]);
   const spec = data.spec;
   const plans = data.plans || [];
+  // Group verifications by criterion_id, latest first within each
+  // bucket so the expanded card shows the most recent result up top.
+  const verifByCrit = new Map();
+  for (const v of allVerifs) {
+    const k = v.criterion_id || "";
+    if (!verifByCrit.has(k)) verifByCrit.set(k, []);
+    verifByCrit.get(k).push(v);
+  }
 
   mount.innerHTML = "";
   mount.appendChild(el("h1", {}, spec.title));
@@ -63,28 +79,39 @@ async function refresh(mount, pid, sid) {
   }
   mount.appendChild(intentCard);
 
-  // Acceptance criteria — list with remove buttons (only while editable).
+  // Acceptance criteria — one expandable card per criterion. Header
+  // shows status (from the latest verification across all runs) +
+  // kind + text. Click to expand: shows every verification for that
+  // criterion newest first, with image artifacts (gif / screenshot /
+  // visual_diff) rendered full-width inline so the captured proof
+  // lives right under the criterion that demanded it.
   mount.appendChild(el("h2", {}, "Acceptance criteria"));
   const crits = readJSON(spec.acceptance_criteria);
   if (crits.length === 0) {
     mount.appendChild(el("p", { class: "empty" }, "No criteria yet."));
   } else {
-    const ul = el("ul", { class: "criteria-list" });
     for (const c of crits) {
-      const statusClass = c.satisfied ? "pass" : "pending";
-      const li = el("li", {}, [
-        el("span", { class: "pill mono " + statusClass }, c.sensor_kind),
-        el("span", {}, c.text),
-        el("span", { class: "row", style: "gap:8px;justify-content:flex-end" }, [
-          el("span", { class: "pill " + statusClass }, c.satisfied ? "pass" : "pending"),
-          editable
-            ? el("button", { class: "danger" }, "remove")
-            : null,
-        ]),
+      const history = verifByCrit.get(c.id) || [];
+      const latest = history[0]; // newest first
+      // Card status reflects the freshest verification, not the
+      // satisfied flag — a "satisfied" criterion that just regressed
+      // should show its current state.
+      const status = latest?.status || (c.satisfied ? "pass" : "pending");
+      const card = el("details", { class: "criterion-row " + statusBorderClass(status) });
+
+      const head = el("summary", { class: "criterion-row__head" }, [
+        el("span", { class: "pill " + statusPillClass(status) }, status),
+        el("span", { class: "pill mono criterion-row__kind" }, c.sensor_kind),
+        el("span", { class: "criterion-row__text" }, c.text),
+        history.length > 0
+          ? el("span", { class: "muted mono", style: "font-size:11px" },
+              `${history.length} result${history.length === 1 ? "" : "s"}`)
+          : el("span", { class: "muted mono", style: "font-size:11px" }, "no run yet"),
       ]);
       if (editable) {
-        const removeBtn = li.querySelector("button.danger");
-        removeBtn.addEventListener("click", async () => {
+        const rm = el("button", { class: "danger criterion-row__remove" }, "remove");
+        rm.addEventListener("click", async (e) => {
+          e.preventDefault();
           if (!confirm(`Remove criterion "${c.text}"?`)) return;
           try {
             const remaining = crits.filter((x) => x.id !== c.id);
@@ -93,10 +120,21 @@ async function refresh(mount, pid, sid) {
             refresh(mount, pid, sid);
           } catch (err) { toast(err.message, "error"); }
         });
+        head.appendChild(rm);
       }
-      ul.appendChild(li);
+      card.appendChild(head);
+
+      // Expanded body — verifications.
+      if (history.length === 0) {
+        card.appendChild(el("p", { class: "muted criterion-row__empty" },
+          "No verification yet — fires when the run reaches the validate phase."));
+      } else {
+        for (const v of history) {
+          card.appendChild(renderVerification(v, pid));
+        }
+      }
+      mount.appendChild(card);
     }
-    mount.appendChild(ul);
   }
 
   // Inline "add criterion" form. Visible only while the spec is still
@@ -220,6 +258,41 @@ function statusPillClass(s) {
   return ({ done: "pass", pass: "pass", validated: "pass",
             failed: "fail", aborted: "fail", fail: "fail",
             warn: "warn" }[s]) || "pending";
+}
+
+function statusBorderClass(s) {
+  return "border-" + statusPillClass(s);
+}
+
+// renderVerification produces the body card for one verification in
+// the criterion's expanded list. Image kinds (gif / screenshot /
+// visual_diff) get the artifact rendered full-width and clicking opens
+// the run dashboard for that run so the user can annotate it from
+// the same toolbox they already have. Non-image kinds (judge, lint,
+// shell) just show summary + run link.
+function renderVerification(v, pid) {
+  const isImage = v.artifact_url &&
+    (v.kind === "gif" || v.kind === "screenshot" || v.kind === "visual_diff");
+  const card = el("div", { class: "criterion-row__verif" });
+  card.appendChild(el("div", { class: "row criterion-row__verif-head" }, [
+    el("span", { class: "pill " + statusPillClass(v.status) }, v.status),
+    el("span", { class: "muted mono", style: "font-size:11px" },
+      new Date(v.created_at).toLocaleString()),
+    el("span", { class: "spacer" }),
+    el("a", { href: `#/projects/${pid}/runs/${v.run_id}`, class: "muted",
+              style: "font-size:11px" }, "open run dashboard →"),
+  ]));
+  if (v.summary) {
+    card.appendChild(el("p", { class: "criterion-row__verif-summary" }, v.summary));
+  }
+  if (isImage) {
+    card.appendChild(el("img", {
+      src: v.artifact_url, alt: v.kind,
+      class: "criterion-row__verif-img",
+      loading: "lazy",
+    }));
+  }
+  return card;
 }
 
 // JSONB columns now arrive as raw JSON (json.RawMessage on the server) so

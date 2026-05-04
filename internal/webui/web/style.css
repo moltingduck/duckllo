@@ -460,6 +460,49 @@ label { display: block; margin: 8px 0 3px; font-size: 12px; color: var(--fg-dim)
   padding: 8px 0; border-bottom: 1px dashed var(--border);
 }
 
+/* Expandable criterion row on the spec page — one per criterion,
+   click summary to reveal the full verification history with
+   inline image artifacts. */
+details.criterion-row {
+  background: var(--bg-card); border: 1px solid var(--border); border-radius: 6px;
+  margin-bottom: 8px; padding: 0; overflow: hidden;
+}
+details.criterion-row.border-pass    { border-left: 3px solid var(--pass); }
+details.criterion-row.border-fail    { border-left: 3px solid var(--fail); }
+details.criterion-row.border-warn    { border-left: 3px solid var(--warn); }
+details.criterion-row.border-pending { border-left: 3px solid var(--border); }
+.criterion-row__head {
+  display: flex; gap: 10px; align-items: center;
+  padding: 10px 14px; cursor: pointer; list-style: none; user-select: none;
+}
+.criterion-row__head::-webkit-details-marker { display: none; }
+.criterion-row__head::before {
+  content: "▸"; color: var(--fg-dim); font-size: 12px; transition: transform 120ms;
+}
+details[open] > .criterion-row__head::before { transform: rotate(90deg); }
+.criterion-row__kind { background: rgba(255,255,255,0.04); }
+.criterion-row__text { flex: 1; }
+.criterion-row__remove {
+  font-size: 11px; padding: 2px 8px;
+}
+.criterion-row__empty {
+  padding: 8px 14px 14px; margin: 0; font-size: 12px;
+}
+.criterion-row__verif {
+  padding: 10px 14px 12px; border-top: 1px dashed var(--border);
+}
+.criterion-row__verif-head {
+  gap: 8px; align-items: center;
+}
+.criterion-row__verif-summary {
+  margin: 6px 0 8px; font-size: 13px;
+}
+.criterion-row__verif-img {
+  display: block; width: 100%; max-height: 70vh; object-fit: contain;
+  background: var(--bg);
+  border: 1px solid var(--border); border-radius: 4px;
+}
+
 /* Annotator modal */
 .annotator-backdrop {
   position: fixed; inset: 0; background: rgba(0,0,0,0.7);

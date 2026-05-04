@@ -86,6 +86,24 @@ func (s *Server) handleListRunsForSpec(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, runs)
 }
 
+// handleListVerificationsForSpec returns every verification across
+// every run for the spec — newest first. The spec page uses this to
+// fold per-criterion results inline so the captured GIF / screenshot
+// / judge verdict shows up right under the criterion that demanded
+// it, no run-dashboard hop needed.
+func (s *Server) handleListVerificationsForSpec(w http.ResponseWriter, r *http.Request) {
+	spec, ok := loadSpec(s, w, r)
+	if !ok {
+		return
+	}
+	verifs, err := store.New(s.pool).ListVerificationsForSpec(r.Context(), spec.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, verifs)
+}
+
 func (s *Server) handleGetRun(w http.ResponseWriter, r *http.Request) {
 	rid, err := uuid.Parse(chiURLParam(r, "runID"))
 	if err != nil {
