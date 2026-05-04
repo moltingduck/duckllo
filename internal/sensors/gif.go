@@ -22,6 +22,9 @@ import (
 //	  action=navigate    url:    relative or absolute
 //	  action=click       selector
 //	  action=hover       selector  (mouse-over for tooltips/popups)
+//	  action=contextmenu selector  (right-click — fires native event so
+//	                                code listening on `contextmenu`
+//	                                opens its menu)
 //	  action=type        selector, text
 //	  action=wait        selector  (waits for visible)
 //	  action=sleep       sleep_ms
@@ -197,6 +200,23 @@ func buildTask(a gifAction, base string) (chromedp.Tasks, error) {
 			`['mouseover','mouseenter','mousemove'].forEach(function(e){` +
 			`el.dispatchEvent(new MouseEvent(e,{bubbles:true,cancelable:true,clientX:r.left+r.width/2,clientY:r.top+r.height/2}));` +
 			`});})(` + jsString(a.Selector) + `)`
+		return chromedp.Tasks{chromedp.Evaluate(js, nil)}, nil
+	case "contextmenu":
+		// Fires a real `contextmenu` MouseEvent at the element's centre
+		// so any JS listener that calls preventDefault + opens its own
+		// menu (e.g. the project bar's right-click pin/archive menu)
+		// triggers as if the user right-clicked. button:2 marks it as
+		// a right-click so handlers checking e.button see the right
+		// value. Using JS dispatch instead of chromedp.MouseClick
+		// because the latter doesn't have a contextmenu helper and
+		// CDP's Input.dispatchMouseEvent doesn't fire a `contextmenu`
+		// DOM event in headless mode.
+		js := `(function(s){var el=document.querySelector(s);` +
+			`if(!el) throw new Error('selector not found: '+s);` +
+			`var r=el.getBoundingClientRect();` +
+			`var x=r.left+r.width/2, y=r.top+r.height/2;` +
+			`el.dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,cancelable:true,button:2,buttons:2,clientX:x,clientY:y}));` +
+			`})(` + jsString(a.Selector) + `)`
 		return chromedp.Tasks{chromedp.Evaluate(js, nil)}, nil
 	case "type":
 		return chromedp.Tasks{chromedp.SendKeys(a.Selector, a.Text, chromedp.ByQuery)}, nil
