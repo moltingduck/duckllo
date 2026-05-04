@@ -69,6 +69,23 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, run)
 }
 
+// handleListRunsForSpec returns every run for the spec — newest first.
+// Used by the spec page's Runs timeline so a user can navigate back
+// to past runs (and their captured screenshots / GIFs) without
+// having to remember URLs.
+func (s *Server) handleListRunsForSpec(w http.ResponseWriter, r *http.Request) {
+	spec, ok := loadSpec(s, w, r)
+	if !ok {
+		return
+	}
+	runs, err := store.New(s.pool).ListRunsForSpec(r.Context(), spec.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, runs)
+}
+
 func (s *Server) handleGetRun(w http.ResponseWriter, r *http.Request) {
 	rid, err := uuid.Parse(chiURLParam(r, "runID"))
 	if err != nil {

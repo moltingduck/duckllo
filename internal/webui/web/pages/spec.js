@@ -180,6 +180,46 @@ async function refresh(mount, pid, sid) {
       mount.appendChild(card);
     }
   }
+
+  // Runs timeline — newest first, click to open the run dashboard.
+  // Without this section the user has no UI path to a finished run's
+  // dashboard (where the GIFs and screenshots actually live), so any
+  // captured artifact is effectively orphaned once the run completes.
+  let runs = [];
+  try {
+    runs = await api(`/api/projects/${pid}/specs/${sid}/runs`);
+  } catch (_) { runs = []; }
+  mount.appendChild(el("h2", {}, "Runs"));
+  if (runs.length === 0) {
+    mount.appendChild(el("p", { class: "empty" },
+      "No runs yet. Approve the spec then click 'Start run' above."));
+  } else {
+    for (const r of runs) {
+      const row = el("div", { class: "card" }, [
+        el("div", { class: "row" }, [
+          el("strong", { class: "mono" }, r.id.slice(0, 8)),
+          el("span", { class: "pill " + statusPillClass(r.status) }, r.status),
+          el("span", { class: "muted mono", style: "font-size:11px" },
+            `${r.turns_used}/${r.turn_budget} turns · ${r.token_usage} tokens`),
+          el("span", { class: "spacer" }),
+          el("span", { class: "muted mono", style: "font-size:11px" },
+            new Date(r.created_at).toLocaleString()),
+        ]),
+        el("div", { class: "row", style: "margin-top:8px;gap:8px" }, [
+          el("button", { class: "secondary" }, "Open run dashboard"),
+        ]),
+      ]);
+      row.querySelector("button").addEventListener("click",
+        () => go(`/projects/${pid}/runs/${r.id}`));
+      mount.appendChild(row);
+    }
+  }
+}
+
+function statusPillClass(s) {
+  return ({ done: "pass", pass: "pass", validated: "pass",
+            failed: "fail", aborted: "fail", fail: "fail",
+            warn: "warn" }[s]) || "pending";
 }
 
 // JSONB columns now arrive as raw JSON (json.RawMessage on the server) so

@@ -72,6 +72,7 @@ func (s *Server) routes() http.Handler {
 				r.Post("/reject", s.handleRejectSpec)
 				r.Post("/plans", s.handleCreatePlan)
 				r.Post("/runs", s.handleCreateRun)
+				r.Get("/runs", s.handleListRunsForSpec)
 			})
 
 			// Plans.

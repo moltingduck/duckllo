@@ -80,6 +80,34 @@ func (s *Store) EnqueueRun(ctx context.Context, specID uuid.UUID, planID *uuid.U
 	return &run, tx.Commit(ctx)
 }
 
+// ListRunsForSpec returns every run belonging to the spec, newest
+// first. The spec dashboard surfaces this as a "Runs" timeline so the
+// user can navigate back to a finished run's dashboard (and its
+// captured GIFs / screenshots) without having to remember URLs.
+func (s *Store) ListRunsForSpec(ctx context.Context, specID uuid.UUID) ([]models.Run, error) {
+	rows, err := s.Pool.Query(ctx, `
+		SELECT id, spec_id, plan_id, status, COALESCE(runner_id,''), claimed_at, lock_expires_at,
+		       workspace_meta, turn_budget, turns_used, token_usage,
+		       started_at, finished_at, created_at, updated_at
+		FROM runs WHERE spec_id = $1 ORDER BY created_at DESC
+	`, specID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []models.Run{}
+	for rows.Next() {
+		var r models.Run
+		if err := rows.Scan(&r.ID, &r.SpecID, &r.PlanID, &r.Status, &r.RunnerID,
+			&r.ClaimedAt, &r.LockExpiresAt, &r.WorkspaceMeta, &r.TurnBudget, &r.TurnsUsed, &r.TokenUsage,
+			&r.StartedAt, &r.FinishedAt, &r.CreatedAt, &r.UpdatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
 func (s *Store) RunByID(ctx context.Context, id uuid.UUID) (*models.Run, error) {
 	var run models.Run
 	err := s.Pool.QueryRow(ctx, `
