@@ -104,6 +104,21 @@ func (g *GIFSensor) Run(ctx context.Context, c Criterion, env Env) (*Result, err
 	defer cancel()
 
 	base := strings.TrimRight(env.DevURL, "/")
+
+	// Auth-bootstrap: prime localStorage with the runner's bearer
+	// before the scenario starts so any subsequent navigation to a
+	// protected page is logged in. Skipped when there's no AuthToken
+	// or DevURL because there's nowhere to attach storage.
+	if env.AuthToken != "" && base != "" {
+		if err := chromedp.Run(tctx,
+			chromedp.Navigate(base),
+			chromedp.Evaluate(`localStorage.setItem('duckllo.token', `+jsString(env.AuthToken)+`)`, nil),
+		); err != nil {
+			return &Result{Status: "fail", Class: "computational",
+				Summary: "auth bootstrap failed: " + oneLine(err.Error())}, nil
+		}
+	}
+
 	var frames []*image.Paletted
 	var delays []int
 

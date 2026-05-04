@@ -56,6 +56,14 @@ type Env struct {
 	WorkspaceDir string
 	DevURL       string
 	ChromePath   string
+	// AuthToken, when non-empty, is injected into the chromedp session
+	// as localStorage["duckllo.token"] before any user-defined scenario
+	// runs. Without this, screenshots / GIFs of protected duckllo pages
+	// land on the login screen because there's no logged-in session in
+	// the fresh browser context. The token is the runner's project API
+	// key (Bearer-acceptable by the auth middleware), so it doesn't
+	// need to be authored in the spec — sensors auth themselves.
+	AuthToken    string
 	LogF         func(format string, args ...any)
 	Fetch        func(ctx context.Context, url string) ([]byte, error)
 }

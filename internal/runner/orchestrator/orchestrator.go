@@ -401,6 +401,7 @@ func (o *Orchestrator) runValidator(ctx context.Context, work *client.WorkItem, 
 		WorkspaceDir: o.Workspace,
 		DevURL:       o.activeDevURL,
 		ChromePath:   o.ChromePath,
+		AuthToken:    o.Client.APIKey,
 		LogF:         func(f string, args ...any) { log.Printf(f, args...) },
 		Fetch:        o.Client.FetchArtifact,
 	}

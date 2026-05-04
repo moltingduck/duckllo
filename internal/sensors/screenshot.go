@@ -61,8 +61,19 @@ func (s *ScreenshotSensor) Run(ctx context.Context, c Criterion, env Env) (*Resu
 	tctx, cancel := context.WithTimeout(browserCtx, s.timeout)
 	defer cancel()
 
+	// Auth-bootstrap: visit the dev origin once so localStorage is
+	// addressable, set the duckllo.token key, and only then drive to
+	// the target URL. Without this every screenshot of a protected
+	// page captures the login screen instead.
+	authTasks := chromedp.Tasks{}
+	if env.AuthToken != "" && env.DevURL != "" {
+		authTasks = append(authTasks,
+			chromedp.Navigate(env.DevURL),
+			chromedp.Evaluate(`localStorage.setItem('duckllo.token', `+jsString(env.AuthToken)+`)`, nil),
+		)
+	}
 	var pngBytes []byte
-	tasks := chromedp.Tasks{chromedp.Navigate(url)}
+	tasks := append(authTasks, chromedp.Navigate(url))
 	if selector != "" {
 		tasks = append(tasks, chromedp.WaitVisible(selector, chromedp.ByQuery))
 	}
