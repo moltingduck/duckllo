@@ -79,6 +79,14 @@ func (s *Server) handleBundle(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	// Project language ride-along for the runner orchestrator and the
+	// preview endpoint — both append a "Respond in {language}" directive
+	// to the system prompt when this is non-empty.
+	proj, err := st.ProjectByID(r.Context(), spec.ProjectID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
 
 	writeJSON(w, http.StatusOK, bundleResponse{
 		Run:           run,
@@ -88,6 +96,7 @@ func (s *Server) handleBundle(w http.ResponseWriter, r *http.Request) {
 		Iterations:    iterations,
 		Verifications: verifications,
 		OpenAnnotations: annotations,
+		Language:      proj.Language,
 	})
 }
 
@@ -99,6 +108,7 @@ type bundleResponse struct {
 	Iterations      []models.Iteration     `json:"iterations"`
 	Verifications   []models.Verification  `json:"verifications"`
 	OpenAnnotations []models.Annotation    `json:"open_annotations"`
+	Language        string                 `json:"language,omitempty"`
 }
 
 // handleRunPreview returns the assembled prompt for a given (run,
@@ -150,8 +160,13 @@ func (s *Server) handleRunPreview(w http.ResponseWriter, r *http.Request) {
 	iterations, _ := st.ListIterations(r.Context(), run.ID)
 	verifications, _ := st.ListVerificationsForRun(r.Context(), run.ID)
 	openAnnos, _ := st.ListOpenAnnotationsForRun(r.Context(), run.ID)
+	proj, err := st.ProjectByID(r.Context(), spec.ProjectID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
 
-	bundle := bundleToClient(run, spec, plan, rules, iterations, verifications, openAnnos)
+	bundle := bundleToClient(run, spec, plan, rules, iterations, verifications, openAnnos, proj.Language)
 	preview := orchestrator.PreviewFor(phase, bundle)
 	writeJSON(w, http.StatusOK, preview)
 }
@@ -163,11 +178,12 @@ func (s *Server) handleRunPreview(w http.ResponseWriter, r *http.Request) {
 // since this is a UI-driven preview, not a hot path.
 func bundleToClient(run *models.Run, spec *models.Spec, plan *models.Plan,
 	rules []store.HarnessRule, iters []models.Iteration,
-	verifs []models.Verification, annos []models.Annotation) *client.Bundle {
+	verifs []models.Verification, annos []models.Annotation, language string) *client.Bundle {
 	wire := bundleResponse{
 		Run: run, Spec: spec, Plan: plan,
 		HarnessRules: rules, Iterations: iters,
 		Verifications: verifs, OpenAnnotations: annos,
+		Language: language,
 	}
 	raw, _ := json.Marshal(wire)
 	var b client.Bundle

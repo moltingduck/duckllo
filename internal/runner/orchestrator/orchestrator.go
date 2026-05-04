@@ -184,7 +184,7 @@ func shortID(u uuid.UUID) string {
 // approves it, and advances to execute.
 func (o *Orchestrator) runPlanner(ctx context.Context, work *client.WorkItem, b *client.Bundle) error {
 	resp, err := o.Provider.Complete(ctx, agent.Request{
-		System:   systemPromptFor("planner"),
+		System:   withLanguage(systemPromptFor("planner"), b.Language),
 		Messages: []agent.Message{{Role: "user", Content: userPromptFor("planner", b)}},
 	})
 	if err != nil {
@@ -250,7 +250,7 @@ func (o *Orchestrator) runExecutor(ctx context.Context, work *client.WorkItem, b
 	var lastResp *agent.Response
 	for turn := 0; turn < maxTurns; turn++ {
 		resp, err := o.Provider.Complete(ctx, agent.Request{
-			System: systemPromptFor("executor"), Messages: msgs, Tools: tools,
+			System: withLanguage(systemPromptFor("executor"), b.Language), Messages: msgs, Tools: tools,
 		})
 		if err != nil {
 			return fmt.Errorf("executor turn %d: %w", turn, err)
@@ -283,7 +283,7 @@ func (o *Orchestrator) runExecutor(ctx context.Context, work *client.WorkItem, b
 	// dashboard's iteration timeline can show every tool call and its
 	// result, not just the final summary. Capped at ~64 KiB so a runaway
 	// executor doesn't blow the iterations.transcript column out.
-	transcript := flattenExecutorTranscript(systemPromptFor("executor"), msgs)
+	transcript := flattenExecutorTranscript(withLanguage(systemPromptFor("executor"), b.Language), msgs)
 	it, err := o.postIterationWithTranscript(ctx, work.RunID, "execute", "executor",
 		summary, lastResp, transcript)
 	if err != nil {
@@ -458,7 +458,7 @@ func (o *Orchestrator) runValidator(ctx context.Context, work *client.WorkItem, 
 	var judgeResp *agent.Response
 	if hasJudge {
 		resp, err := o.Provider.Complete(ctx, agent.Request{
-			System:   systemPromptFor("validator"),
+			System:   withLanguage(systemPromptFor("validator"), b.Language),
 			Messages: []agent.Message{{Role: "user", Content: userPromptFor("validator", b)}},
 		})
 		if err != nil {
@@ -560,7 +560,7 @@ func (o *Orchestrator) postSensorResult(ctx context.Context, runID uuid.UUID, c 
 
 func (o *Orchestrator) runCorrector(ctx context.Context, work *client.WorkItem, b *client.Bundle) error {
 	resp, err := o.Provider.Complete(ctx, agent.Request{
-		System:   systemPromptFor("corrector"),
+		System:   withLanguage(systemPromptFor("corrector"), b.Language),
 		Messages: []agent.Message{{Role: "user", Content: userPromptFor("corrector", b)}},
 	})
 	if err != nil {

@@ -21,8 +21,8 @@ func (s *Store) CreateProject(ctx context.Context, name, description string, own
 	if err := tx.QueryRow(ctx, `
 		INSERT INTO projects (name, description, owner_id)
 		VALUES ($1, $2, $3)
-		RETURNING id, name, COALESCE(description,''), owner_id, git_repo_url, settings, created_at, updated_at
-	`, name, description, ownerID).Scan(&p.ID, &p.Name, &p.Description, &p.OwnerID, &p.GitRepoURL, &p.Settings, &p.CreatedAt, &p.UpdatedAt); err != nil {
+		RETURNING id, name, COALESCE(description,''), owner_id, git_repo_url, settings, language, created_at, updated_at
+	`, name, description, ownerID).Scan(&p.ID, &p.Name, &p.Description, &p.OwnerID, &p.GitRepoURL, &p.Settings, &p.Language, &p.CreatedAt, &p.UpdatedAt); err != nil {
 		return nil, err
 	}
 
@@ -68,9 +68,9 @@ func (s *Store) CreateProject(ctx context.Context, name, description string, own
 func (s *Store) ProjectByID(ctx context.Context, id uuid.UUID) (*models.Project, error) {
 	var p models.Project
 	err := s.Pool.QueryRow(ctx, `
-		SELECT id, name, COALESCE(description,''), owner_id, git_repo_url, settings, created_at, updated_at
+		SELECT id, name, COALESCE(description,''), owner_id, git_repo_url, settings, language, created_at, updated_at
 		FROM projects WHERE id = $1
-	`, id).Scan(&p.ID, &p.Name, &p.Description, &p.OwnerID, &p.GitRepoURL, &p.Settings, &p.CreatedAt, &p.UpdatedAt)
+	`, id).Scan(&p.ID, &p.Name, &p.Description, &p.OwnerID, &p.GitRepoURL, &p.Settings, &p.Language, &p.CreatedAt, &p.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -96,7 +96,7 @@ func (s *Store) ListProjectsForUser(ctx context.Context, userID uuid.UUID) ([]mo
 	out := []models.Project{}
 	for rows.Next() {
 		var p models.Project
-		if err := rows.Scan(&p.ID, &p.Name, &p.Description, &p.OwnerID, &p.GitRepoURL, &p.Settings, &p.CreatedAt, &p.UpdatedAt); err != nil {
+		if err := rows.Scan(&p.ID, &p.Name, &p.Description, &p.OwnerID, &p.GitRepoURL, &p.Settings, &p.Language, &p.CreatedAt, &p.UpdatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, p)
@@ -104,17 +104,18 @@ func (s *Store) ListProjectsForUser(ctx context.Context, userID uuid.UUID) ([]mo
 	return out, rows.Err()
 }
 
-func (s *Store) UpdateProject(ctx context.Context, id uuid.UUID, name, description, gitRepo string) (*models.Project, error) {
+func (s *Store) UpdateProject(ctx context.Context, id uuid.UUID, name, description, gitRepo, language string) (*models.Project, error) {
 	var p models.Project
 	err := s.Pool.QueryRow(ctx, `
 		UPDATE projects
 		SET name = COALESCE(NULLIF($2,''), name),
 		    description = COALESCE($3, description),
 		    git_repo_url = COALESCE($4, git_repo_url),
+		    language = COALESCE(NULLIF($5,''), language),
 		    updated_at = NOW()
 		WHERE id = $1
-		RETURNING id, name, COALESCE(description,''), owner_id, git_repo_url, settings, created_at, updated_at
-	`, id, name, description, gitRepo).Scan(&p.ID, &p.Name, &p.Description, &p.OwnerID, &p.GitRepoURL, &p.Settings, &p.CreatedAt, &p.UpdatedAt)
+		RETURNING id, name, COALESCE(description,''), owner_id, git_repo_url, settings, language, created_at, updated_at
+	`, id, name, description, gitRepo, language).Scan(&p.ID, &p.Name, &p.Description, &p.OwnerID, &p.GitRepoURL, &p.Settings, &p.Language, &p.CreatedAt, &p.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
 	}

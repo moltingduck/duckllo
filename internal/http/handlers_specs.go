@@ -16,12 +16,14 @@ import (
 type suggestCriteriaReq struct {
 	Title  string       `json:"title"`
 	Intent string       `json:"intent"`
+	Lang   string       `json:"lang,omitempty"`
 	QA     []suggest.QA `json:"qa,omitempty"`
 }
 
 type refineSpecReq struct {
 	Title  string `json:"title"`
 	Intent string `json:"intent"`
+	Lang   string `json:"lang,omitempty"`
 }
 
 func (s *Server) requireProvider(w http.ResponseWriter) bool {
@@ -52,7 +54,7 @@ func (s *Server) handleRefineSpec(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "title required")
 		return
 	}
-	out, err := suggest.Refine(r.Context(), s.provider, req.Title, req.Intent)
+	out, err := suggest.Refine(r.Context(), s.provider, req.Title, req.Intent, req.Lang)
 	if err != nil {
 		writeError(w, http.StatusBadGateway, err.Error())
 		return
@@ -78,7 +80,7 @@ func (s *Server) handleSuggestCriteria(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "title required")
 		return
 	}
-	out, err := suggest.Criteria(r.Context(), s.provider, req.Title, req.Intent, req.QA)
+	out, err := suggest.Criteria(r.Context(), s.provider, req.Title, req.Intent, req.Lang, req.QA)
 	if err != nil {
 		writeError(w, http.StatusBadGateway, err.Error())
 		return

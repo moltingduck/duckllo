@@ -37,6 +37,10 @@ type Project struct {
 	OwnerID     uuid.UUID       `json:"owner_id"`
 	GitRepoURL  string          `json:"git_repo_url"`
 	Settings    json.RawMessage `json:"settings"`
+	// Language tells the LLM what language to reply in. Default 'en'.
+	// 'zh-TW' currently supported. UI language is per-user and stored
+	// client-side; this is purely about model output.
+	Language    string          `json:"language"`
 	CreatedAt   time.Time       `json:"created_at"`
 	UpdatedAt   time.Time       `json:"updated_at"`
 }

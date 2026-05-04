@@ -13,6 +13,7 @@
 import { api, get, patch, post, events, auth } from "/api.js";
 import { el } from "/router.js";
 import { toast } from "/toast.js";
+import { t as tr } from "/i18n.js";
 
 const VISIBLE_LIMIT = 6;          // tiles rendered inline; rest go to "..."
 const HOVER_OPEN_DELAY_MS = 120;  // tiny delay so chips don't flash on accidental hover
@@ -71,7 +72,7 @@ function paint() {
 
   // "+ New project" affordance lives at the right end so the user
   // doesn't have to navigate away to start one.
-  const newBtn = el("button", { class: "project-bar__new", title: "Create a new project" }, "+ New project");
+  const newBtn = el("button", { class: "project-bar__new", title: tr("nav.newProject") }, tr("nav.newProject"));
   newBtn.addEventListener("click", createProject);
   row.appendChild(newBtn);
 
@@ -151,7 +152,7 @@ function renderBadges(t) {
     badges.appendChild(tag);
   });
   if (badges.children.length === 0) {
-    badges.appendChild(el("span", { class: "project-bar__badge-empty muted" }, "all clear"));
+    badges.appendChild(el("span", { class: "project-bar__badge-empty muted" }, tr("bar.allClear")));
   }
   return badges;
 }
@@ -163,7 +164,7 @@ function renderBadges(t) {
 // getting clipped, and looks consistent regardless of how the bar is
 // scrolled. Delayed open + immediate close so a quick mouseover or
 // drag doesn't flash a card.
-function attachHoverCard(tile, t) {
+function attachHoverCard(tile, tile_obj) {
   let openTimer = null;
   let card = null;
 
@@ -188,37 +189,37 @@ function attachHoverCard(tile, t) {
     }
 
     const specRow = chain([
-      [s.specs_by_status?.draft     || 0, "draft",     "Title and intent still mutable"],
-      [s.specs_by_status?.proposed  || 0, "proposed",  "Submitted for review; PM hasn't approved"],
-      [s.specs_by_status?.approved  || 0, "approved",  "Criteria frozen; ready to run"],
-      [s.specs_by_status?.running   || 0, "running",   "A run is in flight"],
-      [s.specs_by_status?.validated || 0, "validated", "Run finished; awaiting merge"],
+      [s.specs_by_status?.draft     || 0, tr("bar.draft"),     "Title and intent still mutable"],
+      [s.specs_by_status?.proposed  || 0, tr("bar.proposed"),  "Submitted for review; PM hasn't approved"],
+      [s.specs_by_status?.approved  || 0, tr("bar.approved"),  "Criteria frozen; ready to run"],
+      [s.specs_by_status?.running   || 0, tr("bar.running"),   "A run is in flight"],
+      [s.specs_by_status?.validated || 0, tr("bar.validated"), "Run finished; awaiting merge"],
     ]);
     const runRow = chain([
-      [s.runs_active     || 0, "active",     "Any non-terminal run"],
-      [s.runs_validating || 0, "reviewing",  "Parked in 'validating' awaiting human verdict"],
-      [s.runs_correcting || 0, "correcting", "Fix-loop in flight"],
+      [s.runs_active     || 0, tr("bar.active"),     "Any non-terminal run"],
+      [s.runs_validating || 0, tr("bar.reviewing"),  "Parked in 'validating' awaiting human verdict"],
+      [s.runs_correcting || 0, tr("bar.correcting"), "Fix-loop in flight"],
     ]);
 
     return el("div", { class: "project-bar__hover-card" }, [
-      el("div", { class: "project-bar__hover-title" }, t.name),
-      t.description
-        ? el("div", { class: "project-bar__hover-desc muted" }, t.description)
+      el("div", { class: "project-bar__hover-title" }, tile_obj.name),
+      tile_obj.description
+        ? el("div", { class: "project-bar__hover-desc muted" }, tile_obj.description)
         : null,
       el("div", { class: "project-bar__hover-row" }, [
-        el("span", { class: "project-bar__hover-key" }, "specs"),
+        el("span", { class: "project-bar__hover-key" }, tr("bar.specs")),
         el("span", { class: "project-bar__hover-chain" }, specRow),
       ]),
       el("div", { class: "project-bar__hover-row" }, [
-        el("span", { class: "project-bar__hover-key" }, "runs"),
+        el("span", { class: "project-bar__hover-key" }, tr("bar.runs")),
         el("span", { class: "project-bar__hover-chain" }, runRow),
       ]),
       (s.open_annotations || 0) > 0
         ? el("div", { class: "project-bar__hover-row alert" }, [
-            el("span", { class: "project-bar__hover-key" }, "alerts"),
+            el("span", { class: "project-bar__hover-key" }, tr("bar.alerts")),
             el("span", {}, [
               el("span", { class: "project-bar__chain-num warn" }, String(s.open_annotations)),
-              " ", el("span", { class: "project-bar__chain-label" }, "open annotations"),
+              " ", el("span", { class: "project-bar__chain-label" }, tr("bar.openAnnotations")),
             ]),
           ])
         : null,
@@ -241,7 +242,7 @@ function attachHoverCard(tile, t) {
 
   function open() {
     close();
-    card = build(t.summary || { specs_by_status: {} });
+    card = build(tile_obj.summary || { specs_by_status: {} });
     document.body.appendChild(card);
     // requestAnimationFrame so the .show class triggers the fade-in
     // transition rather than appearing fully visible immediately.

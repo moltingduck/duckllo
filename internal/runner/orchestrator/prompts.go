@@ -8,6 +8,27 @@ import (
 	"github.com/moltingduck/duckllo/internal/runner/client"
 )
 
+// withLanguage appends a "Respond in {language}" directive to the role
+// system prompt when the project has set a non-default language. The
+// JSON output contracts stay in English (criterion ids, status values,
+// JSON keys) — only the human-readable summary / verdict text shifts
+// to the chosen language so the parser still works.
+func withLanguage(prompt, lang string) string {
+	if lang == "" || lang == "en" {
+		return prompt
+	}
+	directive := ""
+	switch lang {
+	case "zh-TW":
+		directive = `
+
+LANGUAGE: Respond in Traditional Chinese (zh-TW) for any human-readable text — summaries, verdicts, plan step descriptions, prose. Keep all JSON keys, criterion IDs, sensor kinds, status enum values ("pass" / "fail" / "warn") in English exactly as the schema defines them; the parser is strict.`
+	default:
+		directive = "\n\nLANGUAGE: Respond in " + lang + " for any human-readable text. Keep all JSON keys and enum values in English."
+	}
+	return prompt + directive
+}
+
 // systemPromptFor returns the role-specific system prompt. Each role gets
 // a tight contract describing what shape of output the runner expects, so
 // JSON parsing on the back end stays deterministic.
@@ -229,7 +250,7 @@ func PreviewFor(phase string, b *client.Bundle) PromptPreview {
 	return PromptPreview{
 		Role:   role,
 		Phase:  phase,
-		System: systemPromptFor(role),
+		System: withLanguage(systemPromptFor(role), b.Language),
 		User:   userPromptSegments(role, b),
 	}
 }

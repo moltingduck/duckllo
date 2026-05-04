@@ -2,6 +2,7 @@ import { api, events } from "/api.js";
 import { go, el, escapeHTML } from "/router.js";
 import { toast } from "/toast.js";
 import { openAnnotator } from "/components/annotator.js";
+import { t } from "/i18n.js";
 
 let currentSource = null;
 
@@ -69,7 +70,7 @@ async function refresh(mount, pid, rid) {
 
   const actionRow = el("div", { class: "row", style: "gap:8px" });
   if (!["done", "failed", "aborted"].includes(run.status)) {
-    const abort = el("button", { class: "danger" }, "Abort run");
+    const abort = el("button", { class: "danger" }, t("run.btn.abort"));
     abort.addEventListener("click", async () => {
       try { await api(`/api/projects/${pid}/runs/${rid}/abort`, { method: "POST" });
         toast("Run aborted"); refresh(mount, pid, rid);
@@ -81,7 +82,7 @@ async function refresh(mount, pid, rid) {
   // Offer "Mark complete" so a PM can force-finish without bouncing
   // through the runner's claim/advance machinery.
   if (run.status === "validating" || run.status === "correcting") {
-    const complete = el("button", {}, "Mark complete");
+    const complete = el("button", {}, t("run.btn.complete"));
     complete.addEventListener("click", async () => {
       if (!confirm("Force this run to 'done' and mark the spec validated?")) return;
       try {
@@ -94,11 +95,11 @@ async function refresh(mount, pid, rid) {
   }
   const previewBtn = el("button", {
     class: "secondary",
-    title: "Show the assembled prompt the agent sees at each phase, with each segment labeled by its source so you can trace and edit it.",
-  }, "Preview prompt");
+    title: t("run.btn.previewHelp"),
+  }, t("run.btn.preview"));
   previewBtn.addEventListener("click", () => go(`/projects/${pid}/runs/${rid}/preview`));
   actionRow.appendChild(previewBtn);
-  const back = el("button", { class: "secondary" }, "Back to spec");
+  const back = el("button", { class: "secondary" }, t("run.btn.backToSpec"));
   back.addEventListener("click", () => go(`/projects/${pid}/specs/${run.spec_id}`));
   actionRow.appendChild(back);
   mount.appendChild(actionRow);

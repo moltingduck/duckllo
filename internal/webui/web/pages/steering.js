@@ -5,6 +5,7 @@
 import { api, get, post, patch, del } from "/api.js";
 import { go, el, escapeHTML } from "/router.js";
 import { toast } from "/toast.js";
+import { t } from "/i18n.js";
 
 const RULE_KINDS = ["agents_md", "skill", "lint_config", "architectural_rule", "judge_prompt"];
 const PEVC_PHASES = ["plan", "execute", "validate", "correct"];
@@ -42,21 +43,45 @@ export async function render(mount, params) {
   const project = await get(`/api/projects/${pid}`);
 
   mount.innerHTML = "";
-  mount.appendChild(el("h1", {}, "Steering loop — " + project.name));
-  mount.appendChild(el("p", { class: "muted" },
-    "Edit the guides and rules the runner bakes into every iteration's prompt. Issues that recur are a signal to encode a new rule here rather than retry."));
+  mount.appendChild(el("h1", {}, t("steering.title", { project: project.name })));
+  mount.appendChild(el("p", { class: "muted" }, t("steering.subtitle")));
+
+  // Agent language picker — what language the model replies in for
+  // this project. Per-project so a Chinese-speaking team doesn't get
+  // English plan summaries; persisted server-side because the runner
+  // (a separate process) needs to read it.
+  const langRow = el("div", { class: "row", style: "gap:8px;margin-bottom:14px;align-items:center" });
+  langRow.appendChild(el("label", {
+    class: "help-tip",
+    title: t("steering.langHelp"),
+    style: "margin:0",
+  }, t("steering.lang") + ":"));
+  const langSel = el("select", {}, [
+    el("option", { value: "en", ...(project.language === "en" ? { selected: "" } : {}) }, "English"),
+    el("option", { value: "zh-TW", ...(project.language === "zh-TW" ? { selected: "" } : {}) }, "繁體中文"),
+  ]);
+  langSel.addEventListener("change", async () => {
+    try {
+      await patch(`/api/projects/${pid}`, { language: langSel.value });
+      toast("Saved");
+    } catch (err) {
+      toast(err.message, "error");
+    }
+  });
+  langRow.appendChild(langSel);
+  mount.appendChild(langRow);
 
   const tabRow = el("div", { class: "row", style: "gap:8px;margin-bottom:16px" });
-  const tRules = el("button", {}, "Harness rules");
-  const tTopo  = el("button", { class: "secondary" }, "Topologies");
-  const tFails = el("button", { class: "secondary" }, "Recurring failures");
-  const tKeys  = el("button", { class: "secondary" }, "API keys");
+  const tRules = el("button", {}, t("steering.tab.rules"));
+  const tTopo  = el("button", { class: "secondary" }, t("steering.tab.topo"));
+  const tFails = el("button", { class: "secondary" }, t("steering.tab.fails"));
+  const tKeys  = el("button", { class: "secondary" }, t("steering.tab.keys"));
   tabRow.appendChild(tRules);
   tabRow.appendChild(tTopo);
   tabRow.appendChild(tFails);
   tabRow.appendChild(tKeys);
   tabRow.appendChild(el("span", { class: "spacer" }));
-  const back = el("button", { class: "secondary" }, "Back to specs");
+  const back = el("button", { class: "secondary" }, t("steering.btn.back"));
   back.addEventListener("click", () => go(`/projects/${pid}/specs`));
   tabRow.appendChild(back);
   mount.appendChild(tabRow);

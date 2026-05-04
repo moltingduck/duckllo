@@ -1411,6 +1411,85 @@ func TestRunPreview_LabeledSegments(t *testing.T) {
 	res.Body.Close()
 }
 
+// TestProjectLanguage_PlumbedThroughBundleAndSuggest covers the
+// agent-language signal end to end:
+//   - PATCH /projects accepts a language and rejects garbage
+//   - GET /projects returns it
+//   - the bundle endpoint exposes it (so the runner orchestrator
+//     can append a "Respond in {lang}" directive to systemPromptFor)
+//   - the suggest endpoint picks it up via request body and the
+//     scripted provider sees a system prompt that includes the
+//     locale instruction
+//
+// Without this test the column could exist but never propagate, and
+// the model would silently keep replying in English even after the
+// user switched the project's language.
+func TestProjectLanguage_PlumbedThroughBundleAndSuggest(t *testing.T) {
+	e := setupTestEnv(t)
+	pid := e.pid
+
+	// 1. PATCH valid + invalid language values.
+	e.c.do("PATCH", "/api/projects/"+pid, e.c.token,
+		map[string]any{"language": "zh-TW"}, nil, http.StatusOK)
+	res := e.c.raw("PATCH", "/api/projects/"+pid, e.c.token,
+		map[string]any{"language": "klingon"})
+	if res.StatusCode != http.StatusBadRequest {
+		t.Errorf("invalid language should be 400; got %d", res.StatusCode)
+	}
+	res.Body.Close()
+
+	// 2. GET /projects returns the new language.
+	var proj map[string]any
+	e.c.do("GET", "/api/projects/"+pid, e.c.token, nil, &proj, http.StatusOK)
+	if proj["language"] != "zh-TW" {
+		t.Errorf("project.language: got %v want zh-TW", proj["language"])
+	}
+
+	// 3. Bundle endpoint exposes language for the runner.
+	var spec map[string]any
+	e.c.do("POST", "/api/projects/"+pid+"/specs", e.c.token,
+		map[string]any{"title": "lang test", "intent": "x"}, &spec, http.StatusCreated)
+	sid := spec["id"].(string)
+	e.c.do("POST", "/api/projects/"+pid+"/specs/"+sid+"/criteria", e.c.token,
+		map[string]any{"text": "ok", "sensor_kind": "judge"}, nil, http.StatusOK)
+	e.c.do("POST", "/api/projects/"+pid+"/specs/"+sid+"/approve", e.c.token, nil, nil, http.StatusOK)
+	var run map[string]any
+	e.c.do("POST", "/api/projects/"+pid+"/specs/"+sid+"/runs", e.c.token,
+		map[string]any{}, &run, http.StatusCreated)
+	rid := run["id"].(string)
+
+	var bundle map[string]any
+	e.c.do("GET", "/api/projects/"+pid+"/runs/"+rid+"/bundle", e.apiKey, nil, &bundle, http.StatusOK)
+	if bundle["language"] != "zh-TW" {
+		t.Errorf("bundle.language: got %v want zh-TW", bundle["language"])
+	}
+
+	// 4. Preview endpoint applies the language directive to system prompt.
+	var preview map[string]any
+	e.c.do("GET", "/api/projects/"+pid+"/runs/"+rid+"/preview?phase=plan", e.c.token, nil, &preview, http.StatusOK)
+	if !strings.Contains(preview["system"].(string), "zh-TW") {
+		t.Errorf("system prompt should mention zh-TW; got: %s", preview["system"])
+	}
+
+	// 5. Suggest endpoint with lang in body — scripted provider sees the
+	// directive in the system prompt.
+	prov := &scriptedProvider{
+		refineJSON:   `{"refined_title":"x","refined_intent":"y","questions":[]}`,
+		criteriaJSON: `{"criteria":[{"text":"ok","sensor_kind":"judge"}]}`,
+	}
+	e.srv.SetSuggestProvider(prov)
+	e.c.do("POST", "/api/projects/"+pid+"/specs/refine", e.c.token,
+		map[string]any{"title": "x", "intent": "y", "lang": "zh-TW"},
+		nil, http.StatusOK)
+	if len(prov.captured) == 0 {
+		t.Fatalf("scripted provider didn't see a request")
+	}
+	if !strings.Contains(prov.captured[0].System, "zh-TW") {
+		t.Errorf("refine system prompt should include zh-TW directive; got: %s",
+			prov.captured[0].System)
+	}
+}
+
 // TestProjectBar_SummaryAndPrefs locks in the API contract the new
 // project bar consumes. The bar fetches /api/projects/bar on initial
 // render to get all projects + each one's prefs + summary in a single

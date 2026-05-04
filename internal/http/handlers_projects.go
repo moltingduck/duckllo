@@ -19,6 +19,19 @@ type patchProjectReq struct {
 	Name        *string `json:"name,omitempty"`
 	Description *string `json:"description,omitempty"`
 	GitRepoURL  *string `json:"git_repo_url,omitempty"`
+	Language    *string `json:"language,omitempty"`
+}
+
+// validProjectLanguage is the allow-list for projects.language. The
+// runner orchestrator and the suggest endpoint inject a "Respond in
+// {language}" directive, so anything we accept here has to be a label
+// the model actually understands. Add to this when shipping new locales.
+func validProjectLanguage(s string) bool {
+	switch s {
+	case "en", "zh-TW":
+		return true
+	}
+	return false
 }
 
 func (s *Server) handleCreateProject(w http.ResponseWriter, r *http.Request) {
@@ -209,7 +222,7 @@ func (s *Server) handlePatchProject(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	name, desc, repo := "", "", ""
+	name, desc, repo, lang := "", "", "", ""
 	if req.Name != nil {
 		name = *req.Name
 	}
@@ -219,7 +232,14 @@ func (s *Server) handlePatchProject(w http.ResponseWriter, r *http.Request) {
 	if req.GitRepoURL != nil {
 		repo = *req.GitRepoURL
 	}
-	updated, err := store.New(s.pool).UpdateProject(r.Context(), p.ID, name, desc, repo)
+	if req.Language != nil {
+		if !validProjectLanguage(*req.Language) {
+			writeError(w, http.StatusBadRequest, "language must be 'en' or 'zh-TW'")
+			return
+		}
+		lang = *req.Language
+	}
+	updated, err := store.New(s.pool).UpdateProject(r.Context(), p.ID, name, desc, repo, lang)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return

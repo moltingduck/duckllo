@@ -11,6 +11,7 @@
 import { api } from "/api.js";
 import { go, el } from "/router.js";
 import { toast } from "/toast.js";
+import { t } from "/i18n.js";
 
 const PHASES = ["plan", "execute", "validate", "correct"];
 
@@ -30,9 +31,8 @@ async function draw() {
   const mount = currentMount;
   mount.innerHTML = "";
 
-  mount.appendChild(el("h1", {}, "Prompt preview"));
-  mount.appendChild(el("p", { class: "muted" },
-    "What the agent sees if it claims this phase right now. Each block is tagged with its source — click 'Edit source' to jump to the page that controls that text."));
+  mount.appendChild(el("h1", {}, t("preview.title")));
+  mount.appendChild(el("p", { class: "muted" }, t("preview.subtitle")));
 
   // Phase tabs.
   const tabs = el("div", { class: "row", style: "gap:6px;margin-bottom:12px" });
@@ -49,14 +49,14 @@ async function draw() {
   });
   const refreshBtn = el("button", {
     class: "secondary",
-    title: "Re-fetch the assembled prompt — useful after editing a source document",
-  }, "Refresh");
+    title: t("preview.btn.refreshHelp"),
+  }, t("preview.btn.refresh"));
   refreshBtn.addEventListener("click", () => draw());
   tabs.appendChild(refreshBtn);
   const backBtn = el("button", {
     class: "secondary",
     style: "margin-left:auto",
-  }, "Back to run");
+  }, t("preview.btn.back"));
   backBtn.addEventListener("click", () => go(`/projects/${pid}/runs/${rid}`));
   tabs.appendChild(backBtn);
   mount.appendChild(tabs);
@@ -72,22 +72,22 @@ async function draw() {
   // System prompt block.
   const sysCard = el("div", { class: "card" }, [
     el("div", { class: "preview-header" }, [
-      el("strong", {}, "System prompt"),
-      el("span", { class: "muted" }, " — role contract for the " + (preview.role || "agent")),
+      el("strong", {}, t("preview.systemHeading")),
+      el("span", { class: "muted" }, " — " + (preview.role || "agent")),
     ]),
     el("pre", { class: "preview-content" }, preview.system || "(empty)"),
   ]);
   mount.appendChild(sysCard);
 
   // User-message segments.
-  const segHeader = el("h2", {}, "User message — labeled segments");
+  const segHeader = el("h2", {}, t("preview.userHeading"));
   segHeader.classList.add("help-tip");
   segHeader.title = "Each card below is one labeled chunk of the user message the agent receives. The order on this page is the same order the runner concatenates them into the actual prompt.";
   mount.appendChild(segHeader);
 
   const segs = preview.user || [];
   if (segs.length === 0) {
-    mount.appendChild(el("p", { class: "empty" }, "No user-message content for this phase."));
+    mount.appendChild(el("p", { class: "empty" }, t("preview.empty")));
     return;
   }
   segs.forEach((seg) => mount.appendChild(renderSegment(seg)));
@@ -108,7 +108,7 @@ function renderSegment(seg) {
       class: "preview-edit-link",
       title: "Open the page where this content can be edited",
       style: "margin-left:auto",
-    }, "Edit source →");
+    }, t("preview.editSource"));
     head.appendChild(link);
   }
   return el("div", { class: "card preview-segment" }, [

@@ -129,13 +129,29 @@ should be a *check*, not a restatement of the goal.`
 // criteria. The UI uses this for the first step of the suggest flow:
 // the user sees the refined draft (editable) and answers the questions
 // before triggering the criteria pass.
-func Refine(ctx context.Context, p agent.Provider, title, intent string) (*RefinedDraft, error) {
+// withLangDirective appends a "Reply in {language}" instruction to a
+// system prompt. Empty / "en" passes through unchanged. JSON keys and
+// enum values stay English so the parsers don't need a locale-aware
+// translation layer; only the human-readable strings (refined_intent,
+// criterion text, question wording) shift.
+func withLangDirective(prompt, lang string) string {
+	if lang == "" || lang == "en" {
+		return prompt
+	}
+	switch lang {
+	case "zh-TW":
+		return prompt + "\n\nLANGUAGE: Reply in Traditional Chinese (zh-TW) for all human-readable strings — refined_title, refined_intent, question text, options, criterion text. Keep JSON keys and sensor_kind values in English exactly as the schema specifies; the parser is strict."
+	}
+	return prompt + "\n\nLANGUAGE: Reply in " + lang + " for all human-readable strings. Keep JSON keys and enum values in English."
+}
+
+func Refine(ctx context.Context, p agent.Provider, title, intent, lang string) (*RefinedDraft, error) {
 	if strings.TrimSpace(title) == "" {
 		return nil, fmt.Errorf("title is required")
 	}
 	user := fmt.Sprintf("Draft title: %s\n\nDraft intent:\n%s", title, intent)
 	resp, err := p.Complete(ctx, agent.Request{
-		System:    refineSystemPrompt,
+		System:    withLangDirective(refineSystemPrompt, lang),
 		Messages:  []agent.Message{{Role: "user", Content: user}},
 		MaxTokens: 1024,
 	})
@@ -184,7 +200,7 @@ func Refine(ctx context.Context, p agent.Provider, title, intent string) (*Refin
 // clarifying questions from a prior Refine call. Returns the parsed
 // list, or an error if the model output couldn't be decoded into the
 // expected shape.
-func Criteria(ctx context.Context, p agent.Provider, title, intent string, qa []QA) ([]SuggestedCriterion, error) {
+func Criteria(ctx context.Context, p agent.Provider, title, intent, lang string, qa []QA) ([]SuggestedCriterion, error) {
 	if strings.TrimSpace(title) == "" {
 		return nil, fmt.Errorf("title is required")
 	}
@@ -203,7 +219,7 @@ func Criteria(ctx context.Context, p agent.Provider, title, intent string, qa []
 	}
 
 	resp, err := p.Complete(ctx, agent.Request{
-		System:    criteriaSystemPrompt,
+		System:    withLangDirective(criteriaSystemPrompt, lang),
 		Messages:  []agent.Message{{Role: "user", Content: b.String()}},
 		MaxTokens: 1024,
 	})

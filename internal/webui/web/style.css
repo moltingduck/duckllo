@@ -43,8 +43,14 @@ a:hover { text-decoration: underline; }
 #crumbs { color: var(--fg-dim); font-family: var(--mono); font-size: 13px; }
 #crumbs a { color: var(--fg-dim); }
 .spacer { flex: 1; }
-.userbox { font-family: var(--mono); font-size: 13px; color: var(--fg-dim); }
+.userbox { font-family: var(--mono); font-size: 13px; color: var(--fg-dim);
+  display: flex; align-items: center; gap: 6px; }
 .userbox .me { color: var(--fg); }
+.lang-picker {
+  background: transparent; color: var(--fg-dim); border: 1px solid var(--border);
+  padding: 2px 6px; border-radius: 4px; font: inherit; cursor: pointer;
+}
+.lang-picker:hover { color: var(--fg); border-color: var(--accent-dim); }
 
 main#app { max-width: 1200px; margin: 0 auto; padding: 22px; }
 
@@ -118,9 +124,12 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 /* Floating detail card. Mounts on document.body with position:fixed
    so it never gets clipped by the topbar's overflow:hidden, and the
    layout is one compact row per category — name · description ·
-   specs chain · runs chain · alerts (only when there are any). */
+   specs chain · runs chain · alerts (only when there are any).
+   z-index sits above the topbar (5) and overflow menu (30) but
+   below the annotator modal backdrop (100) so an open modal still
+   visually covers the card. */
 .project-bar__hover-card {
-  position: fixed; z-index: 1000;
+  position: fixed; z-index: 50;
   width: 320px; max-width: calc(100vw - 16px);
   padding: 10px 12px;
   background: rgba(22,27,34,0.96);

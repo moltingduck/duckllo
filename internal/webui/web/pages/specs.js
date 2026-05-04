@@ -1,6 +1,7 @@
 import { api, events } from "/api.js";
 import { go, el } from "/router.js";
 import { toast } from "/toast.js";
+import { t } from "/i18n.js";
 
 const STATUSES = ["draft", "proposed", "approved", "running", "validated", "merged", "rejected"];
 
@@ -16,7 +17,7 @@ export async function render(mount, params) {
   mount.appendChild(el("p", { class: "muted" }, project.description || "No description"));
 
   const filterRow = el("div", { class: "row", style: "gap:8px;margin-bottom:14px;flex-wrap:wrap" });
-  const allBtn = el("button", { class: "secondary", "data-status": "" }, "All");
+  const allBtn = el("button", { class: "secondary", "data-status": "" }, t("specs.filter.all"));
   filterRow.appendChild(allBtn);
   for (const s of STATUSES) {
     filterRow.appendChild(el("button", { class: "secondary", "data-status": s }, s));
@@ -27,13 +28,11 @@ export async function render(mount, params) {
   // help tooltip explains the concept.
   const steeringBtn = el("button", {
     class: "secondary help-tip",
-    title: "Steering: edit the project's harness rules — guides the runner concatenates into every iteration's prompt — and review recurring failure patterns. This is where you teach the harness 'don't make this mistake again' instead of correcting it inline each time.",
-  }, "Steering");
+    title: t("specs.btn.steeringHelp"),
+  }, t("specs.btn.steering"));
   steeringBtn.addEventListener("click", () => go(`/projects/${pid}/steering`));
   filterRow.appendChild(steeringBtn);
-  const newBtn = el("button", {
-    title: "Compose a new spec: title, intent, and typed acceptance criteria. Approving the spec freezes the criteria and unlocks 'Start run'.",
-  }, "New spec");
+  const newBtn = el("button", { title: t("specs.btn.newSpecHelp") }, t("specs.btn.newSpec"));
   newBtn.addEventListener("click", () => go(`/projects/${pid}/specs/new`));
   filterRow.appendChild(newBtn);
   mount.appendChild(filterRow);

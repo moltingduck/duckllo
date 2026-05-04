@@ -1,6 +1,7 @@
 import { api } from "/api.js";
 import { go, el } from "/router.js";
 import { toast } from "/toast.js";
+import { t, getLang } from "/i18n.js";
 
 const SENSOR_KINDS = ["lint", "unit_test", "e2e_test", "build", "screenshot", "judge", "manual"];
 
@@ -21,9 +22,8 @@ function genID() {
 
 export async function render(mount, params) {
   mount.innerHTML = "";
-  mount.appendChild(el("h1", {}, "New spec"));
-  mount.appendChild(el("p", { class: "muted" },
-    "Each acceptance criterion is a typed sensor target — the runner reads sensor_kind to decide which sensor fires."));
+  mount.appendChild(el("h1", {}, t("specNew.title")));
+  mount.appendChild(el("p", { class: "muted" }, t("specNew.subtitle")));
 
   const titleInput = el("input", { type: "text", placeholder: "Add dark-mode toggle" });
   const intentInput = el("textarea", { rows: "5",
@@ -55,7 +55,7 @@ export async function render(mount, params) {
 
   const newCritText = el("input", { type: "text", placeholder: "User can toggle theme from header" });
   const newCritKind = el("select", {}, SENSOR_KINDS.map((k) => el("option", { value: k }, k)));
-  const addCrit = el("button", { class: "secondary" }, "Add criterion");
+  const addCrit = el("button", { class: "secondary" }, t("specNew.btn.addCriterion"));
   addCrit.addEventListener("click", () => {
     const text = newCritText.value.trim();
     if (!text) return toast("Text required", "error");
@@ -87,17 +87,15 @@ export async function render(mount, params) {
     refinePanel.innerHTML = "";
     refinePanel.style.display = "block";
 
-    refinePanel.appendChild(el("h3", { style: "margin-top:0" },
-      "Refined draft + clarifying questions"));
-    refinePanel.appendChild(el("p", { class: "muted" },
-      "Edit the refined fields if you like, answer the questions (click a chip or type), then generate. Generating also writes the refined title + intent back to the form above."));
+    refinePanel.appendChild(el("h3", { style: "margin-top:0" }, t("specNew.refine.title")));
+    refinePanel.appendChild(el("p", { class: "muted" }, t("specNew.refine.help")));
 
     const refinedTitle = el("input", { type: "text", value: refined.refined_title || "" });
     const refinedIntent = el("textarea", { rows: "4" }, refined.refined_intent || "");
 
-    refinePanel.appendChild(el("label", {}, "Refined title"));
+    refinePanel.appendChild(el("label", {}, t("specNew.refine.refTitle")));
     refinePanel.appendChild(refinedTitle);
-    refinePanel.appendChild(el("label", {}, "Refined intent"));
+    refinePanel.appendChild(el("label", {}, t("specNew.refine.refIntent")));
     refinePanel.appendChild(refinedIntent);
 
     // Each refined question is rendered as: prompt + (optional) row of
@@ -109,7 +107,7 @@ export async function render(mount, params) {
       (q) => q && typeof q.question === "string" && q.question.trim());
     const answerEls = [];
     if (questions.length > 0) {
-      refinePanel.appendChild(el("h4", { style: "margin-top:14px" }, "Questions"));
+      refinePanel.appendChild(el("h4", { style: "margin-top:14px" }, t("specNew.refine.questions")));
       questions.forEach((q) => {
         refinePanel.appendChild(el("p", { class: "question" }, q.question));
         const a = el("textarea", { rows: "2", placeholder: "Click a chip below or type your answer…" });
@@ -132,29 +130,29 @@ export async function render(mount, params) {
       });
     } else {
       refinePanel.appendChild(el("p", { class: "muted",
-        style: "margin-top:14px" },
-        "The model didn't have any clarifying questions — go ahead and generate criteria."));
+        style: "margin-top:14px" }, t("specNew.refine.empty")));
     }
 
     // Single combined action: applies the refined draft to the form
     // above AND generates criteria from (refined title + intent + qa).
-    const genBtn = el("button", {}, "Apply refined draft + generate criteria");
+    const genBtn = el("button", {}, t("specNew.refine.apply"));
     genBtn.addEventListener("click", async () => {
-      const t = refinedTitle.value.trim();
-      const i = refinedIntent.value.trim();
-      if (!t) return toast("Refined title is empty", "error");
+      const titleVal = refinedTitle.value.trim();
+      const intentVal = refinedIntent.value.trim();
+      if (!titleVal) return toast("Refined title is empty", "error");
       const qa = answerEls
         .map(({ q, a }) => ({ q, a: a.value.trim() }))
         .filter(({ a }) => a !== "");
       genBtn.disabled = true;
-      genBtn.textContent = "Asking the model…";
+      genBtn.textContent = t("specNew.btn.suggestBusy");
       try {
         const resp = await api(`/api/projects/${params.pid}/specs/suggest`, {
-          method: "POST", body: { title: t, intent: i, qa } });
+          method: "POST",
+          body: { title: titleVal, intent: intentVal, qa, lang: getLang() } });
         const added = (resp.criteria || []).filter((s) => s.text && s.sensor_kind);
         // Apply refined draft to the form regardless — that's part of the action.
-        titleInput.value = t;
-        intentInput.value = i;
+        titleInput.value = titleVal;
+        intentInput.value = intentVal;
         if (added.length === 0) {
           toast("Model returned nothing usable", "error");
           return;
@@ -169,25 +167,25 @@ export async function render(mount, params) {
         toast(err.message, "error");
       } finally {
         genBtn.disabled = false;
-        genBtn.textContent = "Apply refined draft + generate criteria";
+        genBtn.textContent = t("specNew.refine.apply");
       }
     });
-    const dismissBtn = el("button", { class: "secondary" }, "Dismiss");
+    const dismissBtn = el("button", { class: "secondary" }, t("specNew.refine.dismiss"));
     dismissBtn.addEventListener("click", () => { refinePanel.style.display = "none"; });
     refinePanel.appendChild(el("div", { class: "row",
       style: "gap:8px;margin-top:14px" }, [genBtn, dismissBtn]));
   }
 
-  const suggestBtn = el("button", { class: "secondary" }, "Suggest from title + intent");
+  const suggestBtn = el("button", { class: "secondary" }, t("specNew.btn.suggest"));
   suggestBtn.addEventListener("click", async () => {
     const title = titleInput.value.trim();
     const intent = intentInput.value.trim();
     if (!title) return toast("Type a title first", "error");
     suggestBtn.disabled = true;
-    suggestBtn.textContent = "Refining…";
+    suggestBtn.textContent = t("specNew.btn.refining");
     try {
       const refined = await api(`/api/projects/${params.pid}/specs/refine`, {
-        method: "POST", body: { title, intent } });
+        method: "POST", body: { title, intent, lang: getLang() } });
       renderRefinePanel(refined);
     } catch (err) {
       if (err.status === 503) {
@@ -197,11 +195,11 @@ export async function render(mount, params) {
       }
     } finally {
       suggestBtn.disabled = false;
-      suggestBtn.textContent = "Suggest from title + intent";
+      suggestBtn.textContent = t("specNew.btn.suggest");
     }
   });
 
-  const submit = el("button", {}, "Create");
+  const submit = el("button", {}, t("specNew.btn.create"));
   submit.addEventListener("click", async () => {
     if (!titleInput.value.trim()) return toast("Title required", "error");
     try {
@@ -219,27 +217,14 @@ export async function render(mount, params) {
     }
   });
 
-  const cancel = el("button", { class: "secondary" }, "Cancel");
+  const cancel = el("button", { class: "secondary" }, t("specNew.btn.cancel"));
   cancel.addEventListener("click", () => go(`/projects/${params.pid}/specs`));
 
   const card = el("div", { class: "card", style: "max-width:720px" }, [
-    el("label", {
-      class: "help-tip",
-      title: "Short imperative-voice summary of the change (≤ 70 chars). Becomes the spec's headline in the project list. Frozen once the spec is approved.",
-    }, "Title"), titleInput,
-    el("label", {
-      class: "help-tip",
-      title: "Why this matters and what success looks like. 2-4 sentences is plenty — focus on the user-visible goal, the constraint, and the win condition. The runner reads this on every iteration; the LLM judge uses it to decide if the diff matches intent. Frozen on approval.",
-    }, "Intent"), intentInput,
-    el("label", {
-      class: "help-tip",
-      title: "Sort order on the project's spec list. Doesn't change runner behaviour — purely organisational.",
-    }, "Priority"), priorityInput,
-    el("h2", {
-      class: "help-tip",
-      style: "margin-top:18px",
-      title: "Each criterion is a typed sensor target — when the runner enters the validate phase, it fires one sensor per criterion (lint runs golangci-lint, screenshot drives chromedp, judge calls the LLM judge…). A run only reaches 'done' when every non-manual criterion has a passing verification.",
-    }, "Acceptance criteria"),
+    el("label", { class: "help-tip", title: t("specNew.field.titleHelp") }, t("specNew.field.title")), titleInput,
+    el("label", { class: "help-tip", title: t("specNew.field.intentHelp") }, t("specNew.field.intent")), intentInput,
+    el("label", { class: "help-tip", title: t("specNew.field.priorityHelp") }, t("specNew.field.priority")), priorityInput,
+    el("h2", { class: "help-tip", style: "margin-top:18px", title: t("specNew.criteriaHelp") }, t("specNew.criteria")),
     el("div", { class: "row", style: "gap:8px;margin-bottom:6px" }, [suggestBtn]),
     refinePanel,
     criteriaList,

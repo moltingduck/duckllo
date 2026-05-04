@@ -228,6 +228,11 @@ type Bundle struct {
 	Iterations      []Iteration    `json:"iterations"`
 	Verifications   []Verification `json:"verifications"`
 	OpenAnnotations []Annotation   `json:"open_annotations"`
+	// Language is the project's chosen output language for the model
+	// (e.g. "en" or "zh-TW"). The orchestrator threads this into every
+	// systemPromptFor() call so the agent's responses come back in the
+	// language the human reading them speaks.
+	Language        string         `json:"language,omitempty"`
 }
 
 // ─── Endpoints ──────────────────────────────────────────────────────────
