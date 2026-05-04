@@ -2,6 +2,7 @@
 /bin/
 /dist/
 /duckllo
+/duckllo-runner
 /runner
 
 # Local upload store (not source-of-truth)
