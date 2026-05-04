@@ -2,8 +2,8 @@
 // every authenticated page. Each tile shows the project name, three
 // status-attention badges (drafts to edit / proposed to review / runs
 // awaiting review), and a hover card with the full per-status
-// breakdown. Drag tiles to reorder, click the star to pin, click the
-// archive button to move a tile into the overflow "..." menu.
+// breakdown. Drag tiles to reorder, left-click to open, right-click
+// for the pin / archive context menu.
 //
 // Live updates: we open one EventSource per visible project and
 // refetch its summary on any project event. Per-project subscriptions
@@ -38,7 +38,7 @@ export function closeHoverCard() {
 // hovering a tile then clicking through to a page leaves the card
 // floating on document.body forever — mouseleave doesn't fire
 // reliably when the click triggers a route change.
-window.addEventListener("hashchange", closeHoverCard);
+window.addEventListener("hashchange", () => { closeHoverCard(); closeContextMenu(); });
 // Same risk on a global click off-tile (e.g. the user clicks a button
 // somewhere on the page while a tile card was peeking).
 document.addEventListener("click", (e) => {
@@ -46,6 +46,18 @@ document.addEventListener("click", (e) => {
   if (e.target instanceof Element && e.target.closest(".project-bar__tile")) return;
   closeHoverCard();
 }, true);
+
+// One context menu at a time, mounted on document.body so it floats
+// over scrollable containers like the hover card. The cleanup closure
+// removes the dismissal listeners installed when it was opened.
+let openCtxMenu = null;
+
+export function closeContextMenu() {
+  if (!openCtxMenu) return;
+  openCtxMenu.cleanup();
+  openCtxMenu.el.remove();
+  openCtxMenu = null;
+}
 
 export function ensureMount() {
   if (mountEl) return mountEl;
@@ -119,47 +131,24 @@ function renderTile(t, isOverflowItem) {
   // Whole tile is the click target — name, badges, empty space all
   // navigate to the project's specs page. Drag still wins over click
   // because the browser fires `dragend` not `click` after a real drag.
-  // Pin / archive button clicks below stop propagation so they don't
-  // double-fire navigation when toggling state.
-  tile.addEventListener("click", (e) => {
-    // Bail if the click was on an interactive child (pin/archive
-    // button) — they handle their own action.
-    if (e.target.closest("button")) return;
+  tile.addEventListener("click", () => {
     closeHoverCard();
+    closeContextMenu();
     location.hash = `#/projects/${pid}/specs`;
   });
 
-  // Header row: name + pin + archive controls.
+  // Right-click opens the pin / archive context menu in place of the
+  // old inline buttons. preventDefault suppresses the browser's native
+  // menu so ours is the only one shown.
+  tile.addEventListener("contextmenu", (e) => {
+    e.preventDefault();
+    showContextMenu(t, e.clientX, e.clientY);
+  });
+
+  // Header row: name only — pin/archive moved to the context menu.
   const head = el("div", { class: "project-bar__head" }, [
     el("span", { class: "project-bar__name" }, t.name),
   ]);
-  const pinBtn = el("button", {
-    class: "project-bar__icon",
-    title: t.pref.pinned ? "Unpin" : "Pin to the front of the bar",
-  }, t.pref.pinned ? "★" : "☆");
-  pinBtn.addEventListener("click", async (e) => {
-    e.preventDefault();
-    e.stopPropagation();
-    await patch(`/api/projects/${pid}/prefs`, { pinned: !t.pref.pinned });
-    t.pref.pinned = !t.pref.pinned;
-    sortTiles();
-    paint();
-    resubscribe();
-  });
-  const archBtn = el("button", {
-    class: "project-bar__icon",
-    title: t.pref.archived ? "Unarchive — move back to the visible bar" : "Archive — hide in the overflow menu",
-  }, t.pref.archived ? "↩" : "✕");
-  archBtn.addEventListener("click", async (e) => {
-    e.preventDefault();
-    e.stopPropagation();
-    await patch(`/api/projects/${pid}/prefs`, { archived: !t.pref.archived });
-    t.pref.archived = !t.pref.archived;
-    paint();
-    resubscribe();
-  });
-  head.appendChild(pinBtn);
-  head.appendChild(archBtn);
   tile.appendChild(head);
 
   // Status badges row: small icons with counts that need user attention.
@@ -296,11 +285,101 @@ function attachHoverCard(tile, tile_obj) {
     openCardTimer = setTimeout(open, HOVER_OPEN_DELAY_MS);
   });
   tile.addEventListener("mouseleave", closeHoverCard);
-  // Click on the tile (any link / button inside) — close immediately
-  // so the card doesn't survive a navigation. hashchange covers the
-  // route-change path; this covers in-place clicks (pin, archive,
-  // drag-end) where the tile stays but the card should still go.
+  // Click on the tile — close immediately so the card doesn't
+  // survive a navigation. hashchange covers route changes; this
+  // covers in-place clicks where the tile stays.
   tile.addEventListener("click", closeHoverCard);
+}
+
+// showContextMenu floats a small pin / archive menu at the cursor.
+// Mounted on document.body so it isn't clipped by any ancestor's
+// overflow. Closed on outside click, Esc, scroll, resize, or another
+// menu opening.
+function showContextMenu(tile_obj, x, y) {
+  closeContextMenu();
+  closeHoverCard();
+
+  const pid = tile_obj.pref.project_id;
+  const menu = el("div", { class: "project-bar__ctx-menu" });
+  // Suppress the browser's native context menu over our own — feels
+  // wrong to see two menus stacked if the user right-clicks again.
+  menu.addEventListener("contextmenu", (e) => e.preventDefault());
+
+  function item(label, onClick) {
+    const btn = el("button", { class: "project-bar__ctx-item", type: "button" }, label);
+    btn.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      closeContextMenu();
+      try {
+        await onClick();
+      } catch (err) {
+        toast(err.message, "error");
+      }
+    });
+    return btn;
+  }
+
+  menu.appendChild(item(
+    tile_obj.pref.pinned ? tr("bar.unpin") : tr("bar.pin"),
+    async () => {
+      await patch(`/api/projects/${pid}/prefs`, { pinned: !tile_obj.pref.pinned });
+      tile_obj.pref.pinned = !tile_obj.pref.pinned;
+      sortTiles();
+      paint();
+      resubscribe();
+    },
+  ));
+  menu.appendChild(item(
+    tile_obj.pref.archived ? tr("bar.unarchive") : tr("bar.archive"),
+    async () => {
+      await patch(`/api/projects/${pid}/prefs`, { archived: !tile_obj.pref.archived });
+      tile_obj.pref.archived = !tile_obj.pref.archived;
+      paint();
+      resubscribe();
+    },
+  ));
+
+  document.body.appendChild(menu);
+
+  // Clamp inside the viewport — measure after mount so offsetWidth/Height
+  // reflect the actual rendered size.
+  const w = menu.offsetWidth;
+  const h = menu.offsetHeight;
+  const left = Math.max(8, Math.min(x, window.innerWidth - w - 8));
+  const top = Math.max(8, Math.min(y, window.innerHeight - h - 8));
+  menu.style.left = left + "px";
+  menu.style.top = top + "px";
+  requestAnimationFrame(() => menu.classList.add("show"));
+
+  // Outside-click + alternate-trigger dismissal. Capture phase so we
+  // run before any other handlers that might preventDefault or stop
+  // propagation. A right-click on a different tile closes us first,
+  // then that tile's contextmenu listener opens a fresh menu.
+  const onDocPointer = (e) => {
+    if (menu.contains(e.target)) return;
+    closeContextMenu();
+  };
+  const onKey = (e) => {
+    if (e.key === "Escape") closeContextMenu();
+  };
+  const onViewport = () => closeContextMenu();
+
+  document.addEventListener("click", onDocPointer, true);
+  document.addEventListener("contextmenu", onDocPointer, true);
+  document.addEventListener("keydown", onKey);
+  window.addEventListener("scroll", onViewport, { capture: true });
+  window.addEventListener("resize", onViewport);
+
+  openCtxMenu = {
+    el: menu,
+    cleanup: () => {
+      document.removeEventListener("click", onDocPointer, true);
+      document.removeEventListener("contextmenu", onDocPointer, true);
+      document.removeEventListener("keydown", onKey);
+      window.removeEventListener("scroll", onViewport, { capture: true });
+      window.removeEventListener("resize", onViewport);
+    },
+  };
 }
 
 // attachDragHandlers wires HTML5 drag-and-drop to reorder tiles within

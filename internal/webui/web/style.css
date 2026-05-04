@@ -200,6 +200,31 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 }
 .project-bar__error { color: var(--fail); font-size: 12px; padding: 4px 0; }
 
+/* Right-click menu on a tile — pin/unpin and archive/unarchive. Sits
+   above the hover card (z 50) so opening the menu while a card is
+   visible reads correctly even on the brief frame before the card
+   closes. */
+.project-bar__ctx-menu {
+  position: fixed; z-index: 60;
+  min-width: 160px; padding: 4px 0;
+  background: rgba(22,27,34,0.96);
+  border: 1px solid var(--border); border-radius: 6px;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.5), 0 1px 2px rgba(0,0,0,0.4);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  font-size: 12px;
+  opacity: 0; transform: translateY(-2px);
+  transition: opacity 90ms ease-out, transform 120ms ease-out;
+}
+.project-bar__ctx-menu.show { opacity: 1; transform: translateY(0); }
+.project-bar__ctx-item {
+  display: block; width: 100%; text-align: left;
+  background: transparent; border: none; color: var(--fg);
+  padding: 6px 12px; font-size: 12px; cursor: pointer;
+  font-family: inherit;
+}
+.project-bar__ctx-item:hover { background: rgba(255,255,255,0.06); color: var(--accent); }
+
 /* Prompt preview: each segment is a card with a source tag, an
    "Edit source →" link, and the raw prompt content in a monospace
    pre block so the user sees exactly what the agent gets. */

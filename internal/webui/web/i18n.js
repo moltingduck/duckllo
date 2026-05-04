@@ -103,6 +103,10 @@ const STRINGS = {
     "bar.reviewing": "reviewing",
     "bar.correcting":"correcting",
     "bar.openAnnotations": "open annotations",
+    "bar.pin":         "Pin",
+    "bar.unpin":       "Unpin",
+    "bar.archive":     "Archive",
+    "bar.unarchive":   "Unarchive",
   },
 
   "zh-TW": {
@@ -189,6 +193,10 @@ const STRINGS = {
     "bar.reviewing": "待審查",
     "bar.correcting":"修正中",
     "bar.openAnnotations": "開放中的註解",
+    "bar.pin":         "釘選",
+    "bar.unpin":       "取消釘選",
+    "bar.archive":     "封存",
+    "bar.unarchive":   "取消封存",
   },
 };
 
