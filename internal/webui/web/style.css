@@ -532,6 +532,43 @@ details[open] > .criterion-row__head::before { transform: rotate(90deg); }
   border: 1px solid var(--border); border-radius: 4px;
 }
 
+/* "Report not met" affordance — lives at the top of an expanded
+   criterion card, between the summary row and the verification list,
+   so it shows up exactly where a user looking at a "pass" result
+   would notice it. */
+.criterion-row__report-slot {
+  padding: 10px 14px; border-top: 1px dashed var(--border);
+}
+.criterion-row__report-btn { font-size: 12px; padding: 4px 10px; }
+.report-panel {
+  background: var(--bg-elev); border: 1px solid var(--border);
+  border-radius: 6px; padding: 12px; margin: 0;
+}
+.report-panel__lead {
+  margin: 0 0 8px; font-size: 12px; color: var(--fg-dim);
+}
+.report-panel__reasons {
+  display: flex; flex-direction: column; gap: 4px;
+  margin-bottom: 10px;
+}
+.report-panel__reason {
+  display: flex; align-items: flex-start; gap: 8px;
+  font-size: 13px; line-height: 1.4; cursor: pointer;
+  padding: 4px 6px; border-radius: 4px;
+}
+.report-panel__reason:hover { background: rgba(255,255,255,0.03); }
+.report-panel__reason input { margin-top: 3px; }
+.report-panel__text {
+  width: 100%; resize: vertical; font: inherit;
+  background: var(--bg); color: var(--fg);
+  border: 1px solid var(--border); border-radius: 4px;
+  padding: 6px 8px;
+}
+.report-panel__error {
+  margin: 8px 0 0; color: var(--fail); font-size: 12px;
+}
+.report-panel__actions { gap: 8px; margin-top: 10px; }
+
 /* Annotator modal */
 .annotator-backdrop {
   position: fixed; inset: 0; background: rgba(0,0,0,0.7);

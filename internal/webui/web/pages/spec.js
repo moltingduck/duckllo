@@ -1,6 +1,7 @@
 import { api, events, patch, post } from "/api.js";
 import { go, el } from "/router.js";
 import { toast } from "/toast.js";
+import { buildReportPanel } from "/components/report-panel.js";
 
 const SENSOR_KINDS = ["lint", "typecheck", "unit_test", "e2e_test", "build", "screenshot", "judge", "manual"];
 
@@ -124,11 +125,21 @@ async function refresh(mount, pid, sid) {
       }
       card.appendChild(head);
 
-      // Expanded body — verifications.
+      // Expanded body — verifications + (when the latest is pass) a
+      // "report not met" affordance the user can fire to flip the run
+      // back into correcting without writing a long annotation.
       if (history.length === 0) {
         card.appendChild(el("p", { class: "muted criterion-row__empty" },
           "No verification yet — fires when the run reaches the validate phase."));
       } else {
+        // Latest verification only carries a "report not met" button
+        // when the verification status is 'pass' — the whole point of
+        // the affordance is to override a false positive. Anything
+        // else (fail / warn / pending) is already in the corrector's
+        // line of sight, so we hide the button to avoid noise.
+        if (latest && latest.status === "pass") {
+          card.appendChild(renderReportSlot(pid, sid, latest, c, () => refresh(mount, pid, sid)));
+        }
         for (const v of history) {
           card.appendChild(renderVerification(v, pid));
         }
@@ -252,6 +263,28 @@ async function refresh(mount, pid, sid) {
       mount.appendChild(row);
     }
   }
+}
+
+// renderReportSlot owns the open/close lifecycle of the "report not
+// met" affordance for a passed criterion. We keep a button visible by
+// default and swap it for the panel on click — single render avoids
+// the panel ghosting back if the user cancels and re-opens.
+function renderReportSlot(pid, sid, latest, criterion, onSubmitted) {
+  const slot = el("div", { class: "criterion-row__report-slot" });
+  const open = el("button", { class: "secondary criterion-row__report-btn" },
+    "Report not met");
+  open.addEventListener("click", () => {
+    slot.innerHTML = "";
+    slot.appendChild(buildReportPanel({
+      pid,
+      verificationID: latest.id,
+      sensorKind: criterion.sensor_kind,
+      onSubmitted,
+      onCancel: () => { slot.innerHTML = ""; slot.appendChild(open); },
+    }));
+  });
+  slot.appendChild(open);
+  return slot;
 }
 
 function statusPillClass(s) {
