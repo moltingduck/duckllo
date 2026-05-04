@@ -22,6 +22,31 @@ let mountEl = null;
 let tiles = [];                   // current tiles, in display order
 let sources = new Map();          // projectID -> EventSource (closed on render)
 
+// One open hover card at a time, lives on document.body so it floats
+// over scrollable containers. Module-level reference so any code path
+// that ought to dismiss it (route change, repaint, click anywhere off
+// a tile) can do so without going through the originating closure.
+let openCard = null;
+let openCardTimer = null;
+
+export function closeHoverCard() {
+  if (openCardTimer) { clearTimeout(openCardTimer); openCardTimer = null; }
+  if (openCard) { openCard.remove(); openCard = null; }
+}
+
+// Wipe any orphaned card whenever the user navigates. Without this,
+// hovering a tile then clicking through to a page leaves the card
+// floating on document.body forever — mouseleave doesn't fire
+// reliably when the click triggers a route change.
+window.addEventListener("hashchange", closeHoverCard);
+// Same risk on a global click off-tile (e.g. the user clicks a button
+// somewhere on the page while a tile card was peeking).
+document.addEventListener("click", (e) => {
+  if (!openCard) return;
+  if (e.target instanceof Element && e.target.closest(".project-bar__tile")) return;
+  closeHoverCard();
+}, true);
+
 export function ensureMount() {
   if (mountEl) return mountEl;
   // The slot already lives inside #topbar so the bar renders in the
@@ -49,6 +74,9 @@ export async function refresh() {
 }
 
 function paint() {
+  // Repainting blows away tile DOM nodes — the still-open hover card
+  // is on document.body, so close it explicitly or it survives orphaned.
+  closeHoverCard();
   mountEl.innerHTML = "";
 
   // Visible tiles = pinned + non-archived non-pinned, capped to
@@ -165,9 +193,6 @@ function renderBadges(t) {
 // scrolled. Delayed open + immediate close so a quick mouseover or
 // drag doesn't flash a card.
 function attachHoverCard(tile, tile_obj) {
-  let openTimer = null;
-  let card = null;
-
   function build(s) {
     // Compact one-row-per-bucket layout: muted label, then a chain
     // of `count name · count name` pairs. Reads at a glance instead
@@ -227,41 +252,39 @@ function attachHoverCard(tile, tile_obj) {
   }
 
   function position() {
-    if (!card) return;
+    if (!openCard) return;
     const r = tile.getBoundingClientRect();
-    // Pin under the tile by default; flip up if it would overflow
-    // the viewport bottom. Always nudge inside the right edge.
-    card.style.left = Math.max(8, Math.min(r.left, window.innerWidth - 320 - 8)) + "px";
-    const cardH = card.offsetHeight || 120;
+    openCard.style.left = Math.max(8, Math.min(r.left, window.innerWidth - 320 - 8)) + "px";
+    const cardH = openCard.offsetHeight || 120;
     if (r.bottom + cardH + 12 > window.innerHeight) {
-      card.style.top = Math.max(8, r.top - cardH - 8) + "px";
+      openCard.style.top = Math.max(8, r.top - cardH - 8) + "px";
     } else {
-      card.style.top = (r.bottom + 6) + "px";
+      openCard.style.top = (r.bottom + 6) + "px";
     }
   }
 
   function open() {
-    close();
-    card = build(tile_obj.summary || { specs_by_status: {} });
-    document.body.appendChild(card);
-    // requestAnimationFrame so the .show class triggers the fade-in
-    // transition rather than appearing fully visible immediately.
+    closeHoverCard();
+    openCard = build(tile_obj.summary || { specs_by_status: {} });
+    document.body.appendChild(openCard);
     requestAnimationFrame(() => {
       position();
-      card.classList.add("show");
+      if (openCard) openCard.classList.add("show");
     });
-    window.addEventListener("scroll", close, { once: true, capture: true });
-  }
-  function close() {
-    if (card) { card.remove(); card = null; }
+    // Auto-close on scroll because a fixed-position card would
+    // otherwise drift relative to the (now-moved) tile.
+    window.addEventListener("scroll", closeHoverCard, { once: true, capture: true });
   }
   tile.addEventListener("mouseenter", () => {
-    openTimer = setTimeout(open, HOVER_OPEN_DELAY_MS);
+    if (openCardTimer) clearTimeout(openCardTimer);
+    openCardTimer = setTimeout(open, HOVER_OPEN_DELAY_MS);
   });
-  tile.addEventListener("mouseleave", () => {
-    if (openTimer) { clearTimeout(openTimer); openTimer = null; }
-    close();
-  });
+  tile.addEventListener("mouseleave", closeHoverCard);
+  // Click on the tile (any link / button inside) — close immediately
+  // so the card doesn't survive a navigation. hashchange covers the
+  // route-change path; this covers in-place clicks (pin, archive,
+  // drag-end) where the tile stays but the card should still go.
+  tile.addEventListener("click", closeHoverCard);
 }
 
 // attachDragHandlers wires HTML5 drag-and-drop to reorder tiles within
