@@ -18,6 +18,13 @@ var ErrNotFound = errors.New("not found")
 // Callers map this to HTTP 400 so the user gets a clear error.
 var ErrSpecNotEnqueueable = errors.New("spec is not in 'approved' status")
 
+// ErrSpecMerged is returned by CreateAnnotation when a fix_required
+// annotation is posted against a verification whose spec is already
+// in 'merged' status. Merged is the human-confirmed terminal state —
+// the contract is closed and re-opening it for correction would
+// silently undo a shipped change. Handlers map this to HTTP 409.
+var ErrSpecMerged = errors.New("spec is merged — disputes are not accepted")
+
 func (s *Store) CreateUser(ctx context.Context, username, passwordHash, displayName, role string) (*models.User, error) {
 	row := s.Pool.QueryRow(ctx, `
 		INSERT INTO users (username, password_hash, display_name, system_role)

@@ -171,13 +171,34 @@ func (s *Server) handleAddAnnotation(w http.ResponseWriter, r *http.Request) {
 	if user != nil {
 		in.AuthorID = &user.ID
 	}
-	a, err := store.New(s.pool).CreateAnnotation(r.Context(), in)
+	res, err := store.New(s.pool).CreateAnnotation(r.Context(), in)
+	if errors.Is(err, store.ErrSpecMerged) {
+		writeError(w, http.StatusConflict,
+			"spec is merged — disputes are not accepted once the change has shipped")
+		return
+	}
+	if errors.Is(err, store.ErrNotFound) {
+		writeError(w, http.StatusNotFound, "verification not found")
+		return
+	}
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	s.publish(r, "annotation.added", a)
-	writeJSON(w, http.StatusCreated, a)
+	s.publish(r, "annotation.added", res.Annotation)
+	// When a dispute resurrects a done run, fan out the run + spec
+	// state changes so the dashboard reflects the flip in real time.
+	// Without these the user has to refresh to see the run leave its
+	// terminal-looking state.
+	if res.DisputedDoneRun {
+		if res.Run != nil {
+			s.publish(r, "run.advanced", res.Run)
+		}
+		if res.Spec != nil {
+			s.publish(r, "spec.updated", res.Spec)
+		}
+	}
+	writeJSON(w, http.StatusCreated, res.Annotation)
 }
 
 func (s *Server) handleListAnnotations(w http.ResponseWriter, r *http.Request) {

@@ -24,14 +24,17 @@ export async function render(mount, params) {
 }
 
 async function refresh(mount, pid, sid) {
-  // Fetch spec + plans + every verification across every run for the
-  // spec in parallel — the verifications fold under each criterion as
-  // expandable artifact lists. Without the join, a user looking at a
-  // validated spec has no way to see what the validator actually
-  // produced without hopping into a run dashboard.
-  const [data, allVerifs] = await Promise.all([
+  // Fetch spec + plans + every verification across every run + the
+  // runs timeline in parallel. The verifications fold under each
+  // criterion as expandable artifact lists; the runs list drives both
+  // the "Runs" timeline at the bottom and the per-round grouping in
+  // the validated-spec review block at the top. Without the join, a
+  // user looking at a validated spec has no way to see what the
+  // validator actually produced without hopping into a run dashboard.
+  const [data, allVerifs, runs] = await Promise.all([
     api(`/api/projects/${pid}/specs/${sid}`),
     api(`/api/projects/${pid}/specs/${sid}/verifications`).catch(() => []),
+    api(`/api/projects/${pid}/specs/${sid}/runs`).catch(() => []),
   ]);
   const spec = data.spec;
   const plans = data.plans || [];
@@ -49,6 +52,22 @@ async function refresh(mount, pid, sid) {
   const meta = el("p", { class: "muted mono" },
     `${spec.priority} · ${spec.status} · updated ${new Date(spec.updated_at).toLocaleString()}`);
   mount.appendChild(meta);
+
+  // Review block — shown only on validated specs. The acceptance
+  // criteria list further down is the editorial view (one row per
+  // criterion, history nested); the review block is the audit view
+  // (one row per round, criteria nested) so a reviewer can answer
+  // "what did this run claim it did?" without scanning the whole
+  // page. Merged specs skip the block — once shipped the contract is
+  // closed and a review header would just be visual noise.
+  if (spec.status === "validated") {
+    mount.appendChild(renderReviewBlock({
+      pid, sid, spec,
+      runs,
+      verifsByCrit: verifByCrit,
+      onAfterDispute: () => refresh(mount, pid, sid),
+    }));
+  }
 
   // Intent — read mode by default; an Edit button swaps to a textarea.
   // Locked once the spec is past 'approved' so we don't drift the contract
@@ -234,10 +253,7 @@ async function refresh(mount, pid, sid) {
   // Without this section the user has no UI path to a finished run's
   // dashboard (where the GIFs and screenshots actually live), so any
   // captured artifact is effectively orphaned once the run completes.
-  let runs = [];
-  try {
-    runs = await api(`/api/projects/${pid}/specs/${sid}/runs`);
-  } catch (_) { runs = []; }
+  // Runs were fetched in parallel at the top of refresh().
   mount.appendChild(el("h2", {}, "Runs"));
   if (runs.length === 0) {
     mount.appendChild(el("p", { class: "empty" },
@@ -263,6 +279,120 @@ async function refresh(mount, pid, sid) {
       mount.appendChild(row);
     }
   }
+}
+
+// renderReviewBlock builds the validated-spec header: one card per
+// completed round (run), each listing the run's per-criterion verdicts
+// and any captured artifact. Default view shows the latest round only;
+// "展開歷史" reveals older rounds inline. The 「回報未達成」 buttons
+// inside the latest-round block let a reviewer dispute a verdict
+// directly from this header, which is the whole point of opening up
+// disputes after validation — the user shouldn't have to scroll past
+// the contract to find the affordance.
+function renderReviewBlock({ pid, sid, spec, runs, verifsByCrit, onAfterDispute }) {
+  const crits = readJSON(spec.acceptance_criteria);
+  // Run-id order, newest first, restricted to runs that have produced
+  // at least one verification — a queued or planning run has nothing
+  // to review yet.
+  const runIDsWithVerifs = new Set();
+  for (const list of verifsByCrit.values()) {
+    for (const v of list) runIDsWithVerifs.add(v.run_id);
+  }
+  const rounds = runs.filter((r) => runIDsWithVerifs.has(r.id));
+
+  const block = el("section", { class: "review-block" });
+  block.appendChild(el("h2", { class: "review-block__title" }, "Review · 驗證結果"));
+  if (rounds.length === 0) {
+    block.appendChild(el("p", { class: "muted" },
+      "No verifications captured for this spec yet."));
+    return block;
+  }
+
+  const latest = rounds[0];
+  const older = rounds.slice(1);
+  block.appendChild(renderReviewRound({
+    pid, run: latest, crits, verifsByCrit, isLatest: true, onAfterDispute,
+  }));
+
+  if (older.length > 0) {
+    const history = el("div", { class: "review-block__history", style: "display:none" });
+    for (const r of older) {
+      history.appendChild(renderReviewRound({
+        pid, run: r, crits, verifsByCrit, isLatest: false, onAfterDispute,
+      }));
+    }
+    const toggle = el("button", { class: "secondary review-block__toggle" },
+      `展開歷史 (${older.length})`);
+    toggle.addEventListener("click", () => {
+      const open = history.style.display !== "none";
+      history.style.display = open ? "none" : "";
+      toggle.textContent = open ? `展開歷史 (${older.length})` : "收合歷史";
+    });
+    block.appendChild(toggle);
+    block.appendChild(history);
+  }
+  return block;
+}
+
+// renderReviewRound renders one round (= one run) inside the review
+// block: header with run status + timestamp, then one line per
+// criterion showing kind, verdict pill, and a thumbnail/link for the
+// captured artifact (when image-typed). For the latest round on a
+// passed criterion we also surface the "report not met" affordance so
+// disputes are reachable from the header without scrolling.
+function renderReviewRound({ pid, run, crits, verifsByCrit, isLatest, onAfterDispute }) {
+  const round = el("article", { class: "review-round" });
+  round.appendChild(el("header", { class: "row review-round__head" }, [
+    el("span", { class: "pill " + statusPillClass(run.status) }, run.status),
+    el("span", { class: "muted mono", style: "font-size:11px" }, run.id.slice(0, 8)),
+    el("span", { class: "spacer" }),
+    el("span", { class: "muted mono", style: "font-size:11px" },
+      new Date(run.created_at).toLocaleString()),
+  ]));
+
+  for (const c of crits) {
+    // Pick the verification on this criterion that came from this
+    // round's run (a criterion can appear once per round if the
+    // sensor ran). Take the newest entry — repeated retries within
+    // a single run keep their order in the array but the latest is
+    // the one the validator went with.
+    const matches = (verifsByCrit.get(c.id) || []).filter((v) => v.run_id === run.id);
+    const v = matches[0];
+
+    const row = el("div", { class: "review-criterion " + (v ? statusBorderClass(v.status) : "border-pending") });
+    row.appendChild(el("div", { class: "row review-criterion__head" }, [
+      el("span", { class: "pill " + (v ? statusPillClass(v.status) : "pending") },
+        v ? v.status : "no result"),
+      el("span", { class: "pill mono review-criterion__kind" }, c.sensor_kind),
+      el("span", { class: "review-criterion__text" }, c.text),
+    ]));
+    if (v && v.summary) {
+      row.appendChild(el("p", { class: "muted review-criterion__summary" }, v.summary));
+    }
+    if (v && v.artifact_url) {
+      const isImage = v.kind === "gif" || v.kind === "screenshot" || v.kind === "visual_diff";
+      if (isImage) {
+        row.appendChild(el("img", {
+          src: v.artifact_url, alt: v.kind,
+          class: "review-criterion__art", loading: "lazy",
+        }));
+      } else {
+        row.appendChild(el("a", { href: v.artifact_url, class: "muted",
+                                   target: "_blank", rel: "noopener" }, "artifact"));
+      }
+    }
+    // Dispute affordance — only on the latest round, and only when
+    // the validator returned 'pass'. We want users on validated
+    // specs to be able to flip a "pass" they disagree with back to
+    // correcting; we don't surface the button on already-failed
+    // rounds (they're already in the corrector's lane) or on
+    // historical rounds (those are read-only audit trail now).
+    if (isLatest && v && v.status === "pass") {
+      row.appendChild(renderReportSlot(pid, run.spec_id, v, c, onAfterDispute));
+    }
+    round.appendChild(row);
+  }
+  return round;
 }
 
 // renderReportSlot owns the open/close lifecycle of the "report not

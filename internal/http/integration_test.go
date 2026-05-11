@@ -467,6 +467,150 @@ func TestAnnotationFlipsRunToCorrecting(t *testing.T) {
 	}
 }
 
+// TestDoneRunDisputeFlipsBackToCorrecting locks in the post-validation
+// review path: even after a run has been marked done and its spec is
+// 'validated', a human disputing a 'pass' verdict via a fix_required
+// annotation must (a) flip the run back to 'correcting', (b) flip the
+// spec back to 'running', and (c) enqueue a corrector work item.
+// Without all three, a validator's false positive is permanent — the
+// human has no way to say "you got this wrong".
+func TestDoneRunDisputeFlipsBackToCorrecting(t *testing.T) {
+	e := setupTestEnv(t)
+
+	// Spec + criterion + approve + drive runner to validate phase.
+	var spec map[string]any
+	e.c.do("POST", "/api/projects/"+e.pid+"/specs", e.c.token,
+		map[string]any{"title": "dispute test", "intent": "x"}, &spec, http.StatusCreated)
+	sid := spec["id"].(string)
+	e.c.do("POST", "/api/projects/"+e.pid+"/specs/"+sid+"/criteria", e.c.token,
+		map[string]any{"text": "ok", "sensor_kind": "screenshot"}, nil, http.StatusOK)
+	e.c.do("POST", "/api/projects/"+e.pid+"/specs/"+sid+"/approve", e.c.token, nil, nil, http.StatusOK)
+
+	rid, _ := e.runRunnerThroughValidate(t, sid)
+
+	// Re-read the spec to get the criterion id the server assigned, and
+	// post a pass verification keyed to it so the run can legitimately
+	// advance to done (the validator gate only lets all-pass through).
+	var fresh map[string]any
+	e.c.do("GET", "/api/projects/"+e.pid+"/specs/"+sid, e.c.token, nil, &fresh, http.StatusOK)
+	freshSpec := fresh["spec"].(map[string]any)
+	critID := freshSpec["acceptance_criteria"].([]any)[0].(map[string]any)["id"]
+
+	var verif map[string]any
+	e.c.do("POST", "/api/projects/"+e.pid+"/runs/"+rid+"/verifications", e.apiKey,
+		map[string]any{
+			"criterion_id": critID, "kind": "screenshot", "class": "computational",
+			"status": "pass", "summary": "looks good",
+			"artifact_url": "/api/uploads/x.png",
+		}, &verif, http.StatusCreated)
+	vid := verif["id"].(string)
+
+	// Advance the runner to done so spec ends up 'validated'.
+	e.c.do("POST", "/api/projects/"+e.pid+"/runs/"+rid+"/advance", e.apiKey,
+		map[string]any{"runner_id": e.runnerID, "from_phase": "validate", "final_status": "done"},
+		nil, http.StatusOK)
+
+	// Sanity check the end state before the dispute.
+	var run map[string]any
+	e.c.do("GET", "/api/projects/"+e.pid+"/runs/"+rid, e.c.token, nil, &run, http.StatusOK)
+	if got := run["run"].(map[string]any)["status"]; got != "done" {
+		t.Fatalf("pre-dispute run status: got %v want done", got)
+	}
+	e.c.do("GET", "/api/projects/"+e.pid+"/specs/"+sid, e.c.token, nil, &fresh, http.StatusOK)
+	if got := fresh["spec"].(map[string]any)["status"]; got != "validated" {
+		t.Fatalf("pre-dispute spec status: got %v want validated", got)
+	}
+
+	// Dispute: fix_required annotation on the done run's pass verification.
+	e.c.do("POST", "/api/projects/"+e.pid+"/verifications/"+vid+"/annotations", e.c.token,
+		map[string]any{
+			"bbox":    map[string]any{},
+			"body":    "actually missed the toggle",
+			"verdict": "fix_required",
+		}, nil, http.StatusCreated)
+
+	// Run flipped back to correcting + finished_at cleared.
+	e.c.do("GET", "/api/projects/"+e.pid+"/runs/"+rid, e.c.token, nil, &run, http.StatusOK)
+	if got := run["run"].(map[string]any)["status"]; got != "correcting" {
+		t.Fatalf("post-dispute run status: got %v want correcting", got)
+	}
+	// Spec flipped back to running.
+	e.c.do("GET", "/api/projects/"+e.pid+"/specs/"+sid, e.c.token, nil, &fresh, http.StatusOK)
+	if got := fresh["spec"].(map[string]any)["status"]; got != "running" {
+		t.Fatalf("post-dispute spec status: got %v want running", got)
+	}
+
+	// And a corrector can claim — proves the work_queue row was inserted.
+	var claim struct {
+		WorkItem map[string]any `json:"work_item"`
+	}
+	e.c.do("POST", "/api/projects/"+e.pid+"/work/claim", e.apiKey,
+		map[string]any{"runner_id": "dispute-corrector", "phases": []string{"correct"}},
+		&claim, http.StatusOK)
+	if claim.WorkItem["phase"] != "correct" {
+		t.Fatalf("expected correct phase claimed, got %v", claim.WorkItem["phase"])
+	}
+}
+
+// TestMergedSpecRejectsDispute locks in the terminal-state guard:
+// once a spec is 'merged' (the human-confirmed shipped state), a
+// fix_required annotation on any of its verifications must be refused
+// with 4xx and must NOT flip the run back to correcting. Without this
+// gate, a stale UI button on a long-shipped spec could silently
+// re-open work the team thought was closed.
+func TestMergedSpecRejectsDispute(t *testing.T) {
+	e := setupTestEnv(t)
+
+	// Spec + criterion + approve + run-to-done.
+	var spec map[string]any
+	e.c.do("POST", "/api/projects/"+e.pid+"/specs", e.c.token,
+		map[string]any{"title": "merged dispute", "intent": "x"}, &spec, http.StatusCreated)
+	sid := spec["id"].(string)
+	e.c.do("POST", "/api/projects/"+e.pid+"/specs/"+sid+"/criteria", e.c.token,
+		map[string]any{"text": "ok", "sensor_kind": "screenshot"}, nil, http.StatusOK)
+	e.c.do("POST", "/api/projects/"+e.pid+"/specs/"+sid+"/approve", e.c.token, nil, nil, http.StatusOK)
+
+	rid, _ := e.runRunnerThroughValidate(t, sid)
+
+	var fresh map[string]any
+	e.c.do("GET", "/api/projects/"+e.pid+"/specs/"+sid, e.c.token, nil, &fresh, http.StatusOK)
+	critID := fresh["spec"].(map[string]any)["acceptance_criteria"].([]any)[0].(map[string]any)["id"]
+
+	var verif map[string]any
+	e.c.do("POST", "/api/projects/"+e.pid+"/runs/"+rid+"/verifications", e.apiKey,
+		map[string]any{
+			"criterion_id": critID, "kind": "screenshot", "class": "computational",
+			"status": "pass", "summary": "shipped",
+			"artifact_url": "/api/uploads/y.png",
+		}, &verif, http.StatusCreated)
+	vid := verif["id"].(string)
+
+	e.c.do("POST", "/api/projects/"+e.pid+"/runs/"+rid+"/advance", e.apiKey,
+		map[string]any{"runner_id": e.runnerID, "from_phase": "validate", "final_status": "done"},
+		nil, http.StatusOK)
+
+	// Mark the spec merged — the human says "this shipped".
+	e.c.do("PATCH", "/api/projects/"+e.pid+"/specs/"+sid, e.c.token,
+		map[string]any{"status": "merged"}, nil, http.StatusOK)
+
+	// Dispute must be refused with 4xx.
+	res := e.c.raw("POST", "/api/projects/"+e.pid+"/verifications/"+vid+"/annotations",
+		e.c.token,
+		map[string]any{"bbox": map[string]any{}, "body": "wait", "verdict": "fix_required"})
+	defer res.Body.Close()
+	if res.StatusCode < 400 || res.StatusCode >= 500 {
+		body, _ := io.ReadAll(res.Body)
+		t.Fatalf("merged-spec dispute should 4xx; got %d: %s", res.StatusCode, body)
+	}
+
+	// Run stays done (no resurrection).
+	var run map[string]any
+	e.c.do("GET", "/api/projects/"+e.pid+"/runs/"+rid, e.c.token, nil, &run, http.StatusOK)
+	if got := run["run"].(map[string]any)["status"]; got != "done" {
+		t.Fatalf("post-rejection run status: got %v want done (unchanged)", got)
+	}
+}
+
 // TestMultipartArtifactRoundTrip uploads a PNG via the multipart
 // verifications endpoint and reads it back through /api/uploads/.
 func TestMultipartArtifactRoundTrip(t *testing.T) {

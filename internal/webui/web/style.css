@@ -489,6 +489,39 @@ label { display: block; margin: 8px 0 3px; font-size: 12px; color: var(--fg-dim)
   padding: 8px 0; border-bottom: 1px dashed var(--border);
 }
 
+/* Review block on the validated spec page — sits above the editorial
+   criteria list, groups verifications by round (run) for quick audit
+   of "what did this validation actually do". */
+.review-block {
+  background: var(--bg-card); border: 1px solid var(--border);
+  border-radius: 6px; padding: 12px 14px; margin: 12px 0 18px;
+}
+.review-block__title { margin: 0 0 10px; font-size: 16px; }
+.review-block__toggle { font-size: 12px; padding: 4px 10px; margin-top: 8px; }
+.review-block__history { margin-top: 10px; }
+.review-round + .review-round { margin-top: 10px; padding-top: 10px;
+  border-top: 1px dashed var(--border); }
+.review-round__head { gap: 8px; align-items: center; margin-bottom: 6px; }
+.review-criterion {
+  background: var(--bg); border-radius: 4px;
+  padding: 8px 10px; margin-top: 6px;
+}
+.review-criterion.border-pass    { border-left: 3px solid var(--pass); }
+.review-criterion.border-fail    { border-left: 3px solid var(--fail); }
+.review-criterion.border-warn    { border-left: 3px solid var(--warn); }
+.review-criterion.border-pending { border-left: 3px solid var(--border); }
+.review-criterion__head { gap: 8px; align-items: center; }
+.review-criterion__kind { background: rgba(255,255,255,0.04); }
+.review-criterion__text { flex: 1; font-size: 13px; }
+.review-criterion__summary {
+  margin: 6px 0 0; font-size: 12px; color: var(--fg-dim);
+}
+.review-criterion__art {
+  display: block; width: 100%; max-height: 50vh; object-fit: contain;
+  background: var(--bg); border: 1px solid var(--border);
+  border-radius: 4px; margin-top: 8px;
+}
+
 /* Expandable criterion row on the spec page — one per criterion,
    click summary to reveal the full verification history with
    inline image artifacts. */
