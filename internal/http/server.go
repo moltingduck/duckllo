@@ -25,6 +25,7 @@ type Server struct {
 	uploads  *uploads.Store
 	events   *EventBus
 	webFS    fs.FS
+	webDev   bool // true when serving from --web-dir; enables Cache-Control: no-store
 	provider agent.Provider // nil if no API key configured; suggest endpoint 503s
 }
 
@@ -34,12 +35,15 @@ func NewServer(cfg *config.Config, pool *pgxpool.Pool) *Server {
 		panic("uploads init: " + err.Error())
 	}
 	p := selectSuggestProvider(cfg)
+	webFS, webLabel, webDev := webui.Resolve(cfg.WebDir)
+	log.Printf("web served from %s", webLabel)
 	return &Server{
 		cfg:      cfg,
 		pool:     pool,
 		uploads:  up,
 		events:   NewEventBus(),
-		webFS:    webui.Assets(),
+		webFS:    webFS,
+		webDev:   webDev,
 		provider: p,
 	}
 }

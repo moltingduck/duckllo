@@ -21,6 +21,7 @@ import (
 	"github.com/moltingduck/duckllo/internal/dotenv"
 	httpapi "github.com/moltingduck/duckllo/internal/http"
 	"github.com/moltingduck/duckllo/internal/selfhost"
+	"github.com/moltingduck/duckllo/internal/webui"
 )
 
 func main() {
@@ -37,7 +38,7 @@ func main() {
 
 	switch os.Args[1] {
 	case "serve":
-		if err := runServe(); err != nil {
+		if err := runServe(os.Args[2:]); err != nil {
 			fmt.Fprintln(os.Stderr, "serve:", err)
 			os.Exit(1)
 		}
@@ -153,11 +154,18 @@ func env(k, fallback string) string {
 	return fallback
 }
 
-func runServe() error {
+func runServe(args []string) error {
+	fs := flag.NewFlagSet("serve", flag.ExitOnError)
+	webDirFlag := fs.String("web-dir", "", "serve Web UI static assets from this directory instead of the embedded FS (dev mode). Overrides DUCKLLO_WEB_DIR.")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
 	cfg, err := config.Load()
 	if err != nil {
 		return err
 	}
+	cfg.WebDir = webui.ResolveDir(*webDirFlag, cfg.WebDir)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()

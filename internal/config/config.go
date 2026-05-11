@@ -44,6 +44,12 @@ type Config struct {
 
 	// Maximum size of an uploaded artifact in bytes.
 	MaxUploadBytes int64
+
+	// Optional path to serve the Web UI from a directory on disk instead of
+	// the embedded fs.FS. Set via DUCKLLO_WEB_DIR or the --web-dir flag on
+	// `duckllo serve`. Empty = use embed. Used during dev to avoid the
+	// kill+rebuild+restart cycle when iterating on JS/CSS.
+	WebDir string
 }
 
 func Load() (*Config, error) {
@@ -57,6 +63,7 @@ func Load() (*Config, error) {
 		ClaudeCwd:           env("DUCKLLO_CLAUDE_CWD", ""),
 		TailscalePreauthKey: os.Getenv("TAILSCALE_PREAUTH_KEY"),
 		ContainerRuntime:    env("CONTAINER_RUNTIME", "docker"),
+		WebDir:              env("DUCKLLO_WEB_DIR", ""),
 	}
 
 	max, err := strconv.ParseInt(env("DUCKLLO_MAX_UPLOAD", "33554432"), 10, 64) // 32 MiB

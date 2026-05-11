@@ -132,6 +132,11 @@ func (s *Server) routes() http.Handler {
 			writeError(w, http.StatusNotFound, "no such api route")
 			return
 		}
+		if s.webDev {
+			// Disk-backed dev mode: defeat browser caching so a hard-refresh
+			// is not required after editing JS/CSS in --web-dir.
+			w.Header().Set("Cache-Control", "no-store")
+		}
 		fileSrv.ServeHTTP(w, req)
 	})
 	r.Handle("/", uiHandler)
